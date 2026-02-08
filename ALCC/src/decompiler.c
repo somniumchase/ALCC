@@ -58,10 +58,32 @@ static void bs_push(BlockStack* bs, int target, int type) {
     }
 }
 
-static int bs_check_end(BlockStack* bs, int pc) {
-    if (bs->top > 0 && bs->blocks[bs->top-1].target_pc == pc) {
+static int bs_check_end(BlockStack* bs, int pc, Proto* p) {
+    if (bs->top > 0 && bs->blocks[bs->top-1].target_pc <= pc) {
+        // Check for ELSE block transition
+        // If the instruction before this block end was a JMP to a further location,
+        // it means we finished the 'THEN' block and are jumping over the 'ELSE' block.
+        // So this location is the start of the 'ELSE' block.
+        if (pc > 0) {
+             Instruction prev = p->code[pc-1];
+             if (GET_OPCODE(prev) == OP_JMP) {
+                 int sJ = GETARG_sJ(prev);
+                 // In Lua 5.4, JMP uses sJ (25 bits).
+                 // target = pc-1 + 1 + sJ = pc + sJ.
+                 // Wait, JMP is sJ. Offset is relative to pc+1.
+                 int target = pc + sJ;
+
+                 // If this JMP target is > pc, it's an else block.
+                 if (target > pc) {
+                     // We found an else block!
+                     // Update the current block target to the new target.
+                     bs->blocks[bs->top-1].target_pc = target;
+                     return 2; // Signal ELSE
+                 }
+             }
+        }
         bs->top--;
-        return 1;
+        return 1; // Signal END
     }
     return 0;
 }
@@ -178,13 +200,35 @@ static void decompile(Proto* p, int level) {
         current_backend->decode_instruction((uint32_t)p->code[i], &dec);
 
         // Check for end of blocks (IF/ELSE)
-        while (bs_check_end(&bs, i)) {
-            indent--;
-            printf("%*send\n", indent*2, "");
+        int status;
+        while ((status = bs_check_end(&bs, i, p))) {
+            if (status == 2) {
+                printf("%*selse\n", (indent-1)*2, "");
+                // Don't indent-- because we stay in the block (just switched branches)
+            } else {
+                indent--;
+                printf("%*send\n", indent*2, "");
+            }
         }
 
         // Adjust indent for end of loops
         if (dec.op == OP_FORLOOP || dec.op == OP_TFORLOOP) indent--;
+
+        // If instruction is JMP and it was part of an ELSE transition, suppress it?
+        // Wait, if it's an ELSE transition, it's at i-1.
+        // We are at i. JMP at i-1 was processed in previous iteration.
+        // We just printed 'else'.
+        // So the JMP instruction itself was printed as 'goto ...' in previous iteration?
+        // Yes.
+        // We want to suppress 'goto' if it's an else-jump.
+        // To do that, we need to check inside OP_JMP case.
+
+        // Skip printing indentation if we suppressed the instruction (e.g. EXTRAARG or suppressed JMP)
+        // But here we print indent unconditionally.
+        // Let's print indent inside switch or check op first.
+        // For simplicity, print indent here, but JMP case might print nothing.
+        // Actually, if JMP prints nothing, we have dangling indentation.
+        // But JMP is usually on its own line.
 
         printf("%*s  ", indent*2, "");
 
@@ -205,6 +249,24 @@ static void decompile(Proto* p, int level) {
                 break;
             case OP_LOADK:
                 print_var(p, a, i); printf(" = "); print_const(p, bx);
+                break;
+            case OP_VARARG:
+                print_var(p, a, i);
+                if (c > 1) {
+                    for (int j=1; j<c; j++) {
+                        printf(", "); print_var(p, a+j, i);
+                    }
+                    printf(" = ...");
+                } else if (c == 0) {
+                    printf("... = ...");
+                } else if (c == 1) {
+                    printf(" -- vararg (0 results)");
+                } else {
+                    printf(" = ... (%d results)", c - 1);
+                }
+                break;
+            case OP_VARARGPREP:
+                printf("-- varargprep");
                 break;
             case OP_CLOSURE: {
                 Proto* sub = p->p[bx];
@@ -241,6 +303,30 @@ static void decompile(Proto* p, int level) {
                 // If backend maps C correctly...
                 printf("R[%d]", c);
                 break;
+            case OP_NEWTABLE:
+                print_var(p, a, i); printf(" = {}");
+                break;
+            case OP_SETLIST:
+                // vC is array start index? In 5.4: R[A][(C-1)*FPF+i] := R[A+i], 1 <= i <= B
+                // Decoded: a=A, b=vB, c=vC, k=k.
+                // If b==0, use TOP.
+                printf("-- SETLIST "); print_var(p, a, i);
+                if (b > 0) printf(" (size %d)", b);
+                else printf(" (size TOP)");
+                break;
+            case OP_GETFIELD:
+                print_var(p, a, i); printf(" = "); print_var(p, b, i); printf("."); print_const(p, c);
+                break;
+            case OP_SETFIELD:
+                print_var(p, a, i); printf("."); print_const(p, b); printf(" = ");
+                if (k) print_const(p, c);
+                else print_var(p, c, i);
+                break;
+            case OP_SELF:
+                // R[A+1] := R[B]; R[A] := R[B][K[C]:shortstring]
+                print_var(p, a+1, i); printf(" = "); print_var(p, b, i); printf("; ");
+                print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(":"); print_const(p, c);
+                break;
             case OP_CALL:
                 if (c==0) printf("multret = ");
                 else if (c==1) {}
@@ -270,10 +356,26 @@ static void decompile(Proto* p, int level) {
             case OP_RETURN0: printf("return"); break;
             case OP_RETURN1: printf("return "); print_var(p, a, i); break;
             case OP_JMP: {
-                int dest = i + 1 + bx;
-                int dest_lbl = get_label_id(&ja, dest);
-                if (dest_lbl >= 0) printf("goto L%d", dest_lbl);
-                else printf("goto %d", dest);
+                // Check if this is an ELSE jump
+                // It is an ELSE jump if it is the last instruction of the current block (i == target - 1)
+                // and it jumps forward beyond the current block target.
+                int is_else_jump = 0;
+                if (bs.top > 0) {
+                     int current_target = bs.blocks[bs.top-1].target_pc;
+                     if (i == current_target - 1) {
+                         int dest = i + 1 + bx; // JMP uses bx (sJ in 5.4, but here decoded as bx/sJ)
+                         if (dest > current_target) {
+                             is_else_jump = 1;
+                         }
+                     }
+                }
+
+                if (!is_else_jump) {
+                    int dest = i + 1 + bx;
+                    int dest_lbl = get_label_id(&ja, dest);
+                    if (dest_lbl >= 0) printf("goto L%d", dest_lbl);
+                    else printf("goto %d", dest);
+                }
                 break;
             }
             case OP_FORPREP: {
@@ -324,46 +426,126 @@ static void decompile(Proto* p, int level) {
             case OP_NOT: print_var(p, a, i); printf(" = not "); print_var(p, b, i); break;
             case OP_LEN: print_var(p, a, i); printf(" = #"); print_var(p, b, i); break;
 
+            case OP_CONCAT:
+                print_var(p, a, i); printf(" = ");
+                for (int j=0; j<b; j++) {
+                    if (j>0) printf(" .. ");
+                    print_var(p, a+j, i);
+                }
+                break;
+
             // Comparison -> If
             case OP_EQ:
             case OP_LT:
-            case OP_LE: {
+            case OP_LE:
+            case OP_EQK:
+            case OP_EQI:
+            case OP_LTI:
+            case OP_LEI:
+            case OP_GTI:
+            case OP_GEI:
+            case OP_TEST:
+            case OP_TESTSET: {
                 // Peek next instruction for JMP
                 if (i + 1 < p->sizecode) {
                     AlccInstruction next_dec;
                     current_backend->decode_instruction((uint32_t)p->code[i+1], &next_dec);
                     if (next_dec.op == OP_JMP) {
                         int dest = i + 1 + 1 + next_dec.bx; // pc+1 (next) + 1 + offset
-                        // Logic inverted: if condition met, we skip jump. If not met, we jump (to else/end).
-                        // So if we are here (not jumping), condition is TRUE (if k=1) or FALSE (if k=0)?
-                        // Lua 5.4: if ((R[A] == R[B]) ~= k) then pc++
-                        // If result is true (match k), we skip JMP.
-                        // So the block immediately following is the "THEN" block.
-                        // The JMP target is the "ELSE/END" block.
 
-                        const char* op_str = (op==OP_EQ) ? "==" : (op==OP_LT) ? "<" : "<=";
-                        printf("if ("); print_var(p, a, i); printf(" %s ", op_str); print_var(p, b, i);
-                        printf(") %s then", k ? "" : "not"); // Simplified logic
+                        // Print condition
+                        printf("if (");
+                        if (op == OP_TEST || op == OP_TESTSET) {
+                           if (op == OP_TESTSET) {
+                               print_var(p, a, i); printf(" := "); // assignment side effect
+                           }
+                           // condition is implicitly on A (or B for TESTSET?)
+                           // OP_TESTSET A B k: if (not R[B] == k) then pc++ else R[A] := R[B]
+                           // Wait, if condition met (skip), no assignment?
+                           // Actually the instruction sets R[A] only if NOT skipping?
+                           // No, usually TESTSET is `A = B` if B is true/false.
+                           // `if (R[B]) R[A] = R[B]`.
+                           // For decompiler, simplified:
+                           if (op == OP_TESTSET) print_var(p, b, i);
+                           else print_var(p, a, i);
+                        } else {
+                            print_var(p, a, i);
+
+                            const char* op_str = "??";
+                            if (op == OP_EQ || op == OP_EQK || op == OP_EQI) op_str = "==";
+                            else if (op == OP_LT || op == OP_LTI) op_str = "<";
+                            else if (op == OP_LE || op == OP_LEI) op_str = "<=";
+                            else if (op == OP_GTI) op_str = ">";
+                            else if (op == OP_GEI) op_str = ">=";
+
+                            printf(" %s ", op_str);
+
+                            if (op == OP_EQ || op == OP_LT || op == OP_LE) print_var(p, b, i);
+                            else if (op == OP_EQK) print_const(p, b); // b is Bx or B? iABC so B.
+                            else if (op == OP_EQI || op == OP_LTI || op == OP_LEI || op == OP_GTI || op == OP_GEI) printf("%d", b - OFFSET_sC);
+                        }
+                        printf(")");
+
+                        // k handling
+                        // if ((cond) ~= k) skip (true block)
+                        // so if k=0 (false), skip if (cond != 0) -> if (cond)
+                        // so if k=1 (true), skip if (cond != 1) -> if (not cond) (assuming bool)
+
+                        // For TEST: if (not R[A] == k) skip.
+                        // k=0: if (not R[A] == 0) -> if (R[A]). Skip if true.
+                        // k=1: if (not R[A] == 1) -> if (not R[A]). Skip if false.
+
+                        // So generally:
+                        // k=0 => "then" (positive check)
+                        // k=1 => "not ... then" (negative check, or inverted logic)
+
+                        // Wait, for OP_EQ, k=1 means we skip if EQUAL.
+                        // "if (a==b) then".
+                        // Wait. `if ((a==b) ~= k)`.
+                        // If k=1. `(a==b) ~= 1`.
+                        // If a==b is true (1). `1 ~= 1` is False. Don't skip. JMP to else.
+                        // So if k=1, we skip on FALSE?
+                        // No.
+                        // Let's re-read: `OP_EQ A B k`: `if ((R[A] == R[B]) ~= k) then pc++`.
+                        // If k=1.
+                        // If R[A] == R[B]. Then (true ~= 1) is (1 ~= 1) is False. No skip.
+                        // So if Equal, we jump to Else.
+                        // If Not Equal. Then (false ~= 1) is (0 ~= 1) is True. Skip.
+                        // So k=1 means "Skip if Not Equal".
+                        // So "Then" block is executed if Not Equal.
+                        // So `if (a ~= b) then`.
+
+                        // If k=0.
+                        // If R[A] == R[B]. Then (true ~= 0) is (1 ~= 0) is True. Skip.
+                        // So "Then" block is executed if Equal.
+                        // So `if (a == b) then`.
+
+                        // So k=0 means `if (cond)`.
+                        // k=1 means `if not (cond)`.
+
+                        if (op == OP_TEST || op == OP_TESTSET) {
+                             if (k) printf(" is false then"); // k=1 -> skip if false -> if R[A] is false
+                             else printf(" is true then"); // k=0 -> skip if true -> if R[A] is true
+                        } else {
+                             if (k) printf(" is false then"); // k=1 -> skip if false -> if (cond) is false -> if not (cond)
+                             else printf(" is true then"); // k=0 -> skip if true -> if (cond) is true
+                        }
 
                         indent++;
                         bs_push(&bs, dest, 0);
-                        // Skip the JMP in output?
-                        // Actually we print instructions linearly. The JMP is next.
-                        // We should suppress printing the JMP if it's part of structure.
-                        // For now, let's just print structure start.
+                        i++; // Skip the JMP instruction as it's part of the control flow
                         break;
                     }
                 }
-                // Fallback
-                const char* op_str = (op==OP_EQ) ? "==" : (op==OP_LT) ? "<" : "<=";
-                printf("if ("); print_var(p, a, i); printf(" %s ", op_str); print_var(p, b, i); printf(") ~= %d then", k);
+                // Fallback (no JMP follows?)
+                printf("if (conditional check failed to find JMP)");
                 break;
             }
 
             // Immediate
-            case OP_ADDI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" + %d", c); break; // c is sC
-            case OP_SHLI: print_var(p, a, i); printf(" = %d << ", c); print_var(p, b, i); break; // sC << R[B]
-            case OP_SHRI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" >> %d", c); break;
+            case OP_ADDI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" + %d", c - OFFSET_sC); break;
+            case OP_SHLI: print_var(p, a, i); printf(" = %d << ", c - OFFSET_sC); print_var(p, b, i); break;
+            case OP_SHRI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" >> %d", c - OFFSET_sC); break;
 
             // Suppress MMBIN
             case OP_MMBIN:
