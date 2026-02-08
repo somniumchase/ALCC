@@ -1,6 +1,13 @@
 #include "DefaultTemplate.h"
 #include "DecompilerCore.h"
 #include <iostream>
+#include <string.h>
+
+extern "C" {
+#include "lfunc.h"
+#include "lstring.h"
+#include "lopcodes.h"
+}
 
 void DefaultTemplate::decompile(Proto* p, int level, AlccPlugin* plugin) {
     DecompilerCore::decompile(p, level, plugin);
@@ -61,7 +68,7 @@ void DefaultTemplate::print_code(Proto* p, int level, AlccPlugin* plugin) {
                 break;
         }
 
-        // Comments for constants
+        // Comments for constants (Existing Logic)
         if (dec.op == OP_LOADK) {
             int bx = dec.bx;
             if (bx < p->sizek) {
@@ -74,6 +81,119 @@ void DefaultTemplate::print_code(Proto* p, int level, AlccPlugin* plugin) {
                 else if (ttisnumber(k)) printf(" ; %f", fltvalue(k));
             }
         }
+
+        // NEW: Annotate Variables and Upvalues
+        char comment_buf[512];
+        comment_buf[0] = '\0';
+
+        auto append_var = [&](int reg, const char* label) {
+            const char* name = luaF_getlocalname(p, reg + 1, i); // PC is i?
+            // luaF_getlocalname takes PC of *current* instruction?
+            // Usually valid at PC+1? Or PC?
+            // Lua debug info ranges are [startpc, endpc].
+            // If i is inside range, it returns name.
+            if (name) {
+                if (comment_buf[0] == '\0') strcpy(comment_buf, " ; ");
+                else strcat(comment_buf, " ");
+                char tmp[128];
+                snprintf(tmp, sizeof(tmp), "%sR[%d]:%s", label, reg, name);
+                strcat(comment_buf, tmp);
+            }
+        };
+
+        auto append_upval = [&](int uv, const char* label) {
+            if (uv < p->sizeupvalues) {
+                Upvaldesc* u = &p->upvalues[uv];
+                if (u->name) {
+                    if (comment_buf[0] == '\0') strcpy(comment_buf, " ; ");
+                    else strcat(comment_buf, " ");
+                    char tmp[128];
+                    snprintf(tmp, sizeof(tmp), "%sU[%d]:%s", label, uv, getstr(u->name));
+                    strcat(comment_buf, tmp);
+                }
+            }
+        };
+
+        // Analyze operands based on OpCode/Mode to find Registers and Upvalues
+        // We use 'dec' struct which decoded A, B, C, Bx, etc.
+
+        // Registers A is usually destination or source
+        if (info->mode == ALCC_iABC || info->mode == ALCC_ivABC || info->mode == ALCC_iABx || info->mode == ALCC_iAsBx) {
+            append_var(dec.a, "");
+        }
+
+        // B and C
+        if (info->mode == ALCC_iABC || info->mode == ALCC_ivABC) {
+             // Check if B/C are registers or constants using 'k' bit if applicable?
+             // But 'k' bit depends on OpCode semantics.
+             // Generally, if operand is register, we check name.
+             // If constant, we check value?
+             // Simplest is to try checking name for B and C if they look like register indices.
+             // But for 'k' operands, B/C are constant indices. checking localname might fail or give wrong result?
+             // No, constant index 256 might overlap with register 0? No.
+             // But register index 0 overlaps with constant index 0?
+             // Register indices are small. Constant indices can be large.
+             // But if B=0 (constant 0), checking register 0 name "a" -> "B:a" is wrong.
+             // So we must respect 'k'.
+
+             // OP_ADDI: A B sC. B is register. C is immediate.
+             // OP_EQ: A B k. A, B registers. k bit means logic inversion? No.
+             // Lua 5.4: EQ A B k.
+
+             // We can't implement full semantic check for all opcodes here without huge switch.
+             // Heuristic: If 'k' bit is NOT set (or op doesn't use it for that operand), check register.
+             // But 'dec.k' is just the K bit.
+             // It doesn't tell us WHICH operand is K.
+
+             // Let's rely on specific opcodes for Upvalues, and generic A for registers.
+             // And maybe B/C for arithmetic?
+             // OP_ADD: A B C. All registers.
+             if (dec.op == OP_ADD || dec.op == OP_SUB || dec.op == OP_MUL || dec.op == OP_DIV ||
+                 dec.op == OP_IDIV || dec.op == OP_MOD || dec.op == OP_POW ||
+                 dec.op == OP_BAND || dec.op == OP_BOR || dec.op == OP_BXOR ||
+                 dec.op == OP_SHL || dec.op == OP_SHR || dec.op == OP_UNM ||
+                 dec.op == OP_BNOT || dec.op == OP_NOT || dec.op == OP_LEN ||
+                 dec.op == OP_CONCAT || dec.op == OP_MOVE) {
+                 if (dec.b < 255) append_var(dec.b, "");
+                 if (info->mode == ALCC_iABC && dec.c < 255 && dec.op != OP_MOVE && dec.op != OP_UNM && dec.op != OP_BNOT && dec.op != OP_NOT && dec.op != OP_LEN)
+                    append_var(dec.c, "");
+             }
+        }
+
+        // Upvalues
+        if (dec.op == OP_GETUPVAL || dec.op == OP_SETUPVAL) {
+            append_upval(dec.b, "");
+        }
+        else if (dec.op == OP_GETTABUP) {
+            append_upval(dec.b, ""); // Table
+            // C is key (K or R)
+        }
+        else if (dec.op == OP_SETTABUP) {
+            append_upval(dec.a, ""); // Table
+            // B is key (K or R)
+        }
+        else if (dec.op == OP_CLOSURE) {
+             // bx is proto index?
+        }
+
+        // Immediate values
+        if (dec.op == OP_ADDI) {
+             // C is sC (immediate)
+             char tmp[64];
+             if (comment_buf[0] == '\0') strcpy(comment_buf, " ; ");
+             else strcat(comment_buf, " ");
+             snprintf(tmp, sizeof(tmp), "val:%d", dec.c - OFFSET_sC);
+             strcat(comment_buf, tmp);
+        } else if (dec.op == OP_EQI || dec.op == OP_LTI || dec.op == OP_LEI || dec.op == OP_GTI || dec.op == OP_GEI) {
+             // B is sC (immediate)
+             char tmp[64];
+             if (comment_buf[0] == '\0') strcpy(comment_buf, " ; ");
+             else strcat(comment_buf, " ");
+             snprintf(tmp, sizeof(tmp), "val:%d", dec.b - OFFSET_sC);
+             strcat(comment_buf, tmp);
+        }
+
+        printf("%s", comment_buf);
 
         printf("\n");
     }

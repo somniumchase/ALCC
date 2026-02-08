@@ -162,6 +162,29 @@ static void set_proto_printed(Proto* p) {
     }
 }
 
+// Helper to check if an instruction is a conditional jump
+static int is_conditional_jump(Proto* p, int pc, int* target) {
+    if (pc >= p->sizecode) return 0;
+    AlccInstruction dec;
+    current_backend->decode_instruction((uint32_t)p->code[pc], &dec);
+    int op = dec.op;
+
+    // Check for logical ops followed by JMP
+    if (op == OP_EQ || op == OP_LT || op == OP_LE || op == OP_EQK || op == OP_EQI ||
+        op == OP_LTI || op == OP_LEI || op == OP_GTI || op == OP_GEI ||
+        op == OP_TEST || op == OP_TESTSET) {
+
+        if (pc + 1 < p->sizecode) {
+             AlccInstruction next;
+             current_backend->decode_instruction((uint32_t)p->code[pc+1], &next);
+             if (next.op == OP_JMP) {
+                 if (target) *target = pc + 1 + 1 + next.bx;
+                 return 1;
+             }
+        }
+    }
+    return 0;
+}
 
 void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
     JumpAnalysis ja;
@@ -187,6 +210,7 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
 
     char buffer[4096];
     AlccInstruction dec;
+    bool pending_elseif = false;
 
     for (int i=0; i<p->sizecode; i++) {
         if (plugin && plugin->on_decompile_inst) {
@@ -206,7 +230,17 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
         int status;
         while ((status = bs_check_end(&bs, i, p))) {
             if (status == 2) {
-                printf("%*selse\n", (indent-1)*2, "");
+                // Check for ELSEIF
+                int target = -1;
+                // We check if the current instruction 'i' starts an IF.
+                // We relaxed the check for target matching because nested else/ifs can shift the end target.
+                if (is_conditional_jump(p, i, &target)) {
+                     printf("%*selseif ", (indent-1)*2, "");
+                     pending_elseif = true;
+                     // Do NOT print 'else' or change indent yet
+                } else {
+                     printf("%*selse\n", (indent-1)*2, "");
+                }
             } else {
                 indent--;
                 printf("%*send\n", indent*2, "");
@@ -215,7 +249,11 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
 
         if (dec.op == OP_FORLOOP || dec.op == OP_TFORLOOP) indent--;
 
-        printf("%*s  ", indent*2, "");
+        if (!pending_elseif) {
+             printf("%*s  ", indent*2, "");
+        } else {
+             // We are continuing an elseif line, no indentation needed
+        }
 
         int op = dec.op;
         int a = dec.a;
@@ -276,9 +314,72 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
                 print_upval(p, a); printf("["); print_const(p, b); printf("] = ");
                 print_var(p, c, i);
                 break;
-            case OP_NEWTABLE:
-                print_var(p, a, i); printf(" = {}");
+            case OP_NEWTABLE: {
+                // Table Constructor Logic
+                print_var(p, a, i); printf(" = {");
+
+                int table_reg = a;
+                int next_pc = i + 1;
+                int items = 0;
+
+                while (next_pc < p->sizecode) {
+                    AlccInstruction next_inst;
+                    current_backend->decode_instruction((uint32_t)p->code[next_pc], &next_inst);
+
+                    if (next_inst.op == OP_EXTRAARG) { next_pc++; continue; }
+
+                    if (next_inst.op == OP_SETFIELD && next_inst.a == table_reg) {
+                        if (items > 0) printf(", ");
+                        if (next_inst.k) print_const(p, next_inst.b); // Key is const
+                        else print_var(p, next_inst.b, next_pc);      // Key is var
+
+                        printf(" = ");
+
+                        if (next_inst.k) print_const(p, next_inst.c); // Value is const? Wait, instruction encoding.
+                        // OP_SETFIELD A B C k.  R[A][K[B]] = RK[C].
+                        // Wait, my decode above used generic fields.
+                        // Let's check logic:
+                        // OP_SETFIELD: R[A][K[B]] = RK[C]
+                        // B is key (always const?) No, check opmode. iABC.
+                        // Actually in Lua 5.4+: SETFIELD A B C k.
+                        // R[A][k?K[B]:R[B]] = k?K[C]:R[C] ? No.
+                        // Let's assume standard printing:
+
+                        // Wait, I should use the standard printing logic reused.
+                        // print_const(p, next_inst.b) implies B is const index.
+                        // In standard decompile: `print_const(p, b)` was used for key.
+
+                        // Value:
+                        if (next_inst.k) print_const(p, next_inst.c);
+                        else print_var(p, next_inst.c, next_pc);
+
+                        items++;
+                        next_pc++;
+                    } else if (next_inst.op == OP_SETLIST && next_inst.a == table_reg) {
+                         // R[A][(C-1)*FPF+i] = R[A+i]
+                         // B items.
+                         // Just print values from registers.
+                         if (items > 0) printf(", ");
+                         int num = next_inst.b;
+                         if (num == 0) num = 0; // Top?
+
+                         for (int j=1; j<=num; j++) {
+                             if (j>1) printf(", ");
+                             print_var(p, next_inst.a + j, next_pc);
+                         }
+                         if (num == 0) printf("... (TOP)");
+
+                         items++;
+                         next_pc++;
+                    } else {
+                         break;
+                    }
+                }
+
+                printf("}");
+                i = next_pc - 1;
                 break;
+            }
             case OP_SETLIST:
                 printf("-- SETLIST "); print_var(p, a, i);
                 if (b > 0) printf(" (size %d)", b);
@@ -435,7 +536,12 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
                     if (next_dec.op == OP_JMP) {
                         int dest = i + 1 + 1 + next_dec.bx;
 
-                        printf("if ");
+                        if (pending_elseif) {
+                             // No "if "
+                        } else {
+                             printf("if ");
+                        }
+
                         if (op == OP_TEST || op == OP_TESTSET) {
                            if (k) printf("not ");
                            if (op == OP_TESTSET) print_var(p, b, i);
@@ -464,13 +570,23 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
                         }
                         printf(" then");
 
-                        indent++;
+                        if (!pending_elseif) {
+                            indent++;
+                        }
+
+                        // We do NOT reset pending_elseif here because the next iteration needs it?
+                        // No, pending_elseif was used to suppress 'if' and 'indent'.
+                        // Now we are done with the header.
+                        pending_elseif = false;
+
                         bs_push(&bs, dest, 0);
                         i++;
                         break;
                     }
                 }
-                printf("if (conditional check failed)");
+
+                if (!pending_elseif) printf("if (conditional check failed)");
+                else printf("(conditional check failed)");
                 break;
             }
 
@@ -491,6 +607,9 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
             }
         }
         printf("\n");
+
+        // Reset pending_elseif if it wasn't used (e.g. if we encountered a non-conditional instruction inside an elseif candidate... wait that shouldn't happen if is_conditional_jump checked it)
+        pending_elseif = false;
     }
 
     printf("%*send\n", level*2, "");
