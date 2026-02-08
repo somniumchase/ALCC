@@ -82,6 +82,7 @@ jobs:
         rm -rf lua_source
         git clone https://github.com/lua/lua.git lua_source
         cd lua_source
+        sed -i 's/-march=native//g' makefile
         if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
            make all CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
         elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
@@ -99,6 +100,7 @@ jobs:
       if: steps.cache-lua.outputs.cache-hit == 'true'
       run: |
         cd lua_source
+        sed -i 's/-march=native//g' makefile
         if [ ! -f "liblua.a" ]; then
            if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
              make all CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
