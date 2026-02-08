@@ -24,14 +24,14 @@ jobs:
     permissions:
       contents: write
     env:
-      TARGET_ARCH: ${{ inputs.target_arch || 'x86_64' }}
+      ALCC_TARGET_ARCH: ${{ inputs.target_arch || 'x86_64' }}
 
     steps:
     - uses: actions/checkout@v3
 
     - name: Install Dependencies
       run: |
-        if [ "$TARGET_ARCH" = "aarch64" ]; then
+        if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
           sudo dpkg --add-architecture arm64
           # Update sources.list to specify amd64 for existing repos to avoid conflicts
           sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
@@ -49,14 +49,14 @@ jobs:
     - name: Setup ccache
       uses: hendrikmuhs/ccache-action@v1.2
       with:
-        key: ${{ runner.os }}-${{ env.TARGET_ARCH }}
+        key: ${{ runner.os }}-${{ env.ALCC_TARGET_ARCH }}
 
     - name: Cache Lua Source
       id: cache-lua
       uses: actions/cache@v3
       with:
         path: lua_source
-        key: lua-source-v1-${{ runner.os }}-${{ env.TARGET_ARCH }}
+        key: lua-source-v1-${{ runner.os }}-${{ env.ALCC_TARGET_ARCH }}
 
     - name: Setup Lua
       if: steps.cache-lua.outputs.cache-hit != 'true'
@@ -64,7 +64,7 @@ jobs:
         rm -rf lua_source
         git clone https://github.com/lua/lua.git lua_source
         cd lua_source
-        if [ "$TARGET_ARCH" = "aarch64" ]; then
+        if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
            make linux CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
         else
            make all CC="ccache gcc"
@@ -75,7 +75,7 @@ jobs:
       run: |
         cd lua_source
         if [ ! -f "liblua.a" ]; then
-           if [ "$TARGET_ARCH" = "aarch64" ]; then
+           if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
              make linux CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
            else
              make all CC="ccache gcc"
@@ -85,7 +85,7 @@ jobs:
     - name: Build ALCC
       run: |
         cd ALCC
-        if [ "$TARGET_ARCH" = "aarch64" ]; then
+        if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
            make CXX="ccache aarch64-linux-gnu-g++"
         else
            make CXX="ccache g++"
@@ -95,19 +95,19 @@ jobs:
       run: |
         mkdir -p release
         cp ALCC/alcc ALCC/alcc-c ALCC/alcc-d ALCC/alcc-a ALCC/alcc-dec release/
-        tar -czvf alcc-linux-${{ env.TARGET_ARCH }}.tar.gz -C release .
+        tar -czvf alcc-linux-${{ env.ALCC_TARGET_ARCH }}.tar.gz -C release .
 
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: alcc-linux-${{ env.TARGET_ARCH }}
-        path: alcc-linux-${{ env.TARGET_ARCH }}.tar.gz
+        name: alcc-linux-${{ env.ALCC_TARGET_ARCH }}
+        path: alcc-linux-${{ env.ALCC_TARGET_ARCH }}.tar.gz
 
     - name: Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: alcc-linux-${{ env.TARGET_ARCH }}.tar.gz
+        files: alcc-linux-${{ env.ALCC_TARGET_ARCH }}.tar.gz
         fail_on_unmatched_files: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
