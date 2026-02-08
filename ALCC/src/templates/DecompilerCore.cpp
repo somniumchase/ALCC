@@ -213,7 +213,7 @@ static int is_conditional_jump(Proto* p, int pc, int* target) {
     return 0;
 }
 
-void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
+void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const char* name_override) {
     JumpAnalysis ja;
     analyze_jumps(p, &ja);
 
@@ -222,7 +222,13 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
 
     int indent = level + 1;
 
-    printf("%*sfunction func_%p(", level*2, "", p);
+    printf("%*s", level*2, "");
+    if (name_override) {
+        printf("%s(", name_override);
+    } else {
+        printf("function func_%p(", p);
+    }
+
     for (int i=0; i<p->numparams; i++) {
         if (i>0) printf(", ");
         const char* name = luaF_getlocalname(p, i + 1, 0);
@@ -320,8 +326,40 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
                 break;
             case OP_CLOSURE: {
                 Proto* sub = p->p[bx];
-                print_var(p, a, i); printf(" = ");
-                decompile(sub, level + 1, plugin);
+                char name_buf[256];
+                int has_name = 0;
+                int skip_next = 0;
+                const char* final_name = NULL;
+
+                if (i + 1 < p->sizecode) {
+                    AlccInstruction next;
+                    current_backend->decode_instruction((uint32_t)p->code[i+1], &next);
+
+                    if (next.op == OP_SETTABUP && next.c == a) { // SETTABUP Up[A] Key[B] R[C] -> Up[A][Key] = R[C]
+                         if (next.b < p->sizek && ttisstring(&p->k[next.b]) && is_identifier(getstr(tsvalue(&p->k[next.b])))) {
+                             snprintf(name_buf, sizeof(name_buf), "function %s", getstr(tsvalue(&p->k[next.b])));
+                             final_name = name_buf;
+                             has_name = 1;
+                             skip_next = 1;
+                         }
+                    } else if (next.op == OP_MOVE && next.b == a) { // MOVE A B. R[A] = R[B].
+                        const char* loc = luaF_getlocalname(p, next.a + 1, i + 1);
+                        if (loc) {
+                            snprintf(name_buf, sizeof(name_buf), "local function %s", loc);
+                            final_name = name_buf;
+                            has_name = 1;
+                            skip_next = 1;
+                        }
+                    }
+                }
+
+                if (has_name) {
+                    decompile(sub, level, plugin, final_name);
+                    if (skip_next) i++;
+                } else {
+                    print_var(p, a, i); printf(" = ");
+                    decompile(sub, level + 1, plugin, NULL);
+                }
                 set_proto_printed(sub);
                 break;
             }

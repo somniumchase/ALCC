@@ -10,7 +10,7 @@ extern "C" {
 
 class DecompilerCore {
 public:
-    static void decompile(Proto* p, int level, AlccPlugin* plugin);
+    static void decompile(Proto* p, int level, AlccPlugin* plugin, const char* name_override = NULL);
 };
 
 #endif

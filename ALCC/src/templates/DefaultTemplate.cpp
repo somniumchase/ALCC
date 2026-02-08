@@ -2,6 +2,11 @@
 #include "DecompilerCore.h"
 #include <iostream>
 #include <string.h>
+#include <set>
+#include <vector>
+#include <algorithm>
+#include <map>
+#include <string>
 
 extern "C" {
 #include "lfunc.h"
@@ -17,11 +22,38 @@ void DefaultTemplate::disassemble(Proto* p, AlccPlugin* plugin) {
     print_proto(p, 0, plugin);
 }
 
+static void analyze_jump_targets(Proto* p, std::set<int>& targets) {
+    AlccInstruction dec;
+    for (int i = 0; i < p->sizecode; i++) {
+        current_backend->decode_instruction((uint32_t)p->code[i], &dec);
+        int op = dec.op;
+        int target = -1;
+
+        if (op == OP_JMP) {
+            target = i + 1 + dec.bx;
+        } else if (op == OP_FORLOOP || op == OP_TFORLOOP) {
+            target = i + 1 - dec.bx;
+        } else if (op == OP_FORPREP) {
+            target = i + 1 + dec.bx + 1;
+        }
+
+        if (target >= 0 && target < p->sizecode) {
+            targets.insert(target);
+        }
+    }
+}
+
 void DefaultTemplate::print_code(Proto* p, int level, AlccPlugin* plugin) {
     char buffer[4096];
     AlccInstruction dec;
+    std::set<int> targets;
+    analyze_jump_targets(p, targets);
 
     for (int i = 0; i < p->sizecode; i++) {
+        if (targets.count(i)) {
+            printf("%*sL_%d:\n", level*2, "", i + 1);
+        }
+
         Instruction inst = p->code[i];
 
         current_backend->decode_instruction((uint32_t)inst, &dec);
@@ -190,6 +222,24 @@ void DefaultTemplate::print_code(Proto* p, int level, AlccPlugin* plugin) {
              if (comment_buf[0] == '\0') strcpy(comment_buf, " ; ");
              else strcat(comment_buf, " ");
              snprintf(tmp, sizeof(tmp), "val:%d", dec.b - OFFSET_sC);
+             strcat(comment_buf, tmp);
+        }
+
+        // Jump Targets
+        int target = -1;
+        if (dec.op == OP_JMP) {
+            target = i + 1 + dec.bx;
+        } else if (dec.op == OP_FORLOOP || dec.op == OP_TFORLOOP) {
+            target = i + 1 - dec.bx;
+        } else if (dec.op == OP_FORPREP) {
+            target = i + 1 + dec.bx + 1;
+        }
+
+        if (target >= 0) {
+             char tmp[64];
+             if (comment_buf[0] == '\0') strcpy(comment_buf, " ; ");
+             else strcat(comment_buf, " ");
+             snprintf(tmp, sizeof(tmp), "to L_%d", target + 1);
              strcat(comment_buf, tmp);
         }
 
@@ -362,11 +412,35 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
     if (ncode > 0) {
         p->code = luaM_newvector(L, ncode, Instruction);
 
-        for (int i=0; i<ncode; i++) {
+        std::map<std::string, int> labels;
+        struct PendingPatch {
+            int pc;
+            int arg_idx; // 0=A, 1=B, 2=C/Bx (actually just index in args array logic)
+            std::string label;
+        };
+        std::vector<PendingPatch> patches;
+
+        int pc = 0;
+        while (pc < ncode) {
             if (!get_line(ctx, plugin)) parse_error(ctx, "Unexpected EOF while parsing code");
-            char* s = strchr(ctx->buffer, ']');
-            if (!s) continue;
-            s++;
+            char* s = alcc_skip_space(ctx->buffer);
+            if (*s == '\0' || *s == ';') continue;
+
+            // Check for label definition: L_123:
+            if (strncmp(s, "L_", 2) == 0) {
+                char* colon = strchr(s, ':');
+                if (colon) {
+                    *colon = '\0';
+                    labels[std::string(s)] = pc;
+                    s = colon + 1;
+                    s = alcc_skip_space(s);
+                    if (*s == '\0' || *s == ';') continue;
+                }
+            }
+
+            char* bracket = strchr(s, ']');
+            if (!bracket) continue;
+            s = bracket + 1;
 
             char opname[32];
             if (sscanf(s, "%31s", opname) != 1) parse_error(ctx, "Cannot parse opcode");
@@ -394,13 +468,14 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
             s += strlen(opname);
 
             int args[10];
+            std::string arg_labels[10];
             int nargs = 0;
             char* ptr = s;
             int has_k = 0;
             if (strstr(ctx->buffer, "(k)")) has_k = 1;
 
             while (*ptr) {
-                while (*ptr && !isdigit(*ptr) && *ptr != '-') {
+                while (*ptr && !isdigit(*ptr) && *ptr != '-' && *ptr != 'L') {
                      if (*ptr == '\0') break;
                      // Stop if comment
                      if (*ptr == ';') { *ptr = '\0'; break; }
@@ -408,13 +483,22 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
                 }
                 if (!*ptr) break;
 
-                int val;
-                if (sscanf(ptr, "%d", &val) == 1) {
-                    args[nargs++] = val;
-                    if (*ptr == '-') ptr++;
-                    while (isdigit(*ptr)) ptr++;
+                if (strncmp(ptr, "L_", 2) == 0) {
+                     char* end = ptr + 2;
+                     while (isdigit(*end)) end++;
+                     std::string lbl(ptr, end - ptr);
+                     arg_labels[nargs] = lbl;
+                     args[nargs++] = 0; // Placeholder
+                     ptr = end;
                 } else {
-                    ptr++;
+                    int val;
+                    if (sscanf(ptr, "%d", &val) == 1) {
+                        args[nargs++] = val;
+                        if (*ptr == '-') ptr++;
+                        while (isdigit(*ptr)) ptr++;
+                    } else {
+                        ptr++;
+                    }
                 }
             }
 
@@ -435,14 +519,56 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
                 case ALCC_iAsBx:
                 case ALCC_iAx:
                 case ALCC_isJ:
-                    if (nargs >= 2) enc.bx = args[1];
+                    if (nargs >= 2) {
+                        enc.bx = args[1];
+                        if (!arg_labels[1].empty()) patches.push_back({pc, 1, arg_labels[1]});
+                    }
                     if (has_k && info->mode == ALCC_isJ) enc.k = 1;
-                    if (info->mode == ALCC_iAx && nargs >= 1) enc.bx = args[0];
-                    if (info->mode == ALCC_isJ && nargs >= 1) enc.bx = args[0];
+                    if (info->mode == ALCC_iAx && nargs >= 1) {
+                        enc.bx = args[0];
+                        if (!arg_labels[0].empty()) patches.push_back({pc, 0, arg_labels[0]});
+                    }
+                    if (info->mode == ALCC_isJ && nargs >= 1) {
+                         // isJ usually JMP A sJ.
+                         if (nargs >= 2) {
+                             enc.bx = args[1];
+                             if (!arg_labels[1].empty()) patches.push_back({pc, 1, arg_labels[1]});
+                         } else {
+                             enc.bx = args[0];
+                             if (!arg_labels[0].empty()) patches.push_back({pc, 0, arg_labels[0]});
+                         }
+                    }
                     break;
             }
 
-            p->code[i] = (Instruction)current_backend->encode_instruction(&enc);
+            p->code[pc] = (Instruction)current_backend->encode_instruction(&enc);
+            pc++;
+        }
+
+        // Apply patches
+        for (const auto& patch : patches) {
+             if (labels.find(patch.label) == labels.end()) {
+                 parse_error(ctx, "Undefined label: %s", patch.label.c_str());
+             }
+             int target = labels[patch.label];
+             int offset = 0;
+
+             AlccInstruction dec;
+             current_backend->decode_instruction((uint32_t)p->code[patch.pc], &dec);
+
+             int op = dec.op;
+             if (op == OP_JMP) {
+                 offset = target - patch.pc - 1;
+                 dec.bx = offset;
+             } else if (op == OP_FORLOOP || op == OP_TFORLOOP) {
+                 offset = patch.pc + 1 - target;
+                 dec.bx = offset;
+             } else if (op == OP_FORPREP) {
+                 offset = target - patch.pc - 2;
+                 dec.bx = offset;
+             }
+
+             p->code[patch.pc] = (Instruction)current_backend->encode_instruction(&dec);
         }
     }
 
