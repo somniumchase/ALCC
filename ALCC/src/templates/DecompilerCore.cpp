@@ -1,6 +1,7 @@
 #include "DecompilerCore.h"
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 
 extern "C" {
 #include "lua.h"
@@ -16,6 +17,27 @@ extern "C" {
 #include "../core/alcc_backend.h"
 
 #define MAX_LABELS 1000
+
+static int is_identifier(const char* s) {
+    size_t len = strlen(s);
+    if (len == 0) return 0;
+    if (!isalpha((unsigned char)s[0]) && s[0] != '_') return 0;
+    for (size_t i = 1; i < len; i++) {
+        if (!isalnum((unsigned char)s[i]) && s[i] != '_') return 0;
+    }
+
+    static const char* keywords[] = {
+        "and", "break", "do", "else", "elseif",
+        "end", "false", "for", "function", "goto", "if",
+        "in", "local", "nil", "not", "or", "repeat",
+        "return", "then", "true", "until", "while",
+        NULL
+    };
+    for (int i = 0; keywords[i]; i++) {
+        if (strcmp(s, keywords[i]) == 0) return 0;
+    }
+    return 1;
+}
 
 // Internal structures
 struct JumpAnalysis {
@@ -128,7 +150,12 @@ static void print_var(Proto* p, int reg, int pc) {
 
 static void print_upval(Proto* p, int idx) {
     if (idx < p->sizeupvalues && p->upvalues[idx].name) {
-        alcc_print_string(getstr(p->upvalues[idx].name), tsslen(p->upvalues[idx].name));
+        const char* name = getstr(p->upvalues[idx].name);
+        if (is_identifier(name)) {
+            printf("%s", name);
+        } else {
+            alcc_print_string(name, tsslen(p->upvalues[idx].name));
+        }
     } else {
         printf("upval_%d", idx);
     }
@@ -305,13 +332,24 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
                 print_upval(p, b); printf(" = "); print_var(p, a, i);
                 break;
             case OP_GETTABUP:
-                print_var(p, a, i); printf(" = "); print_upval(p, b); printf("["); print_const(p, c); printf("]");
+                print_var(p, a, i); printf(" = "); print_upval(p, b);
+                if (ttisstring(&p->k[c]) && is_identifier(getstr(tsvalue(&p->k[c])))) {
+                    printf(".%s", getstr(tsvalue(&p->k[c])));
+                } else {
+                    printf("["); print_const(p, c); printf("]");
+                }
                 break;
             case OP_GETTABLE:
                 print_var(p, a, i); printf(" = "); print_var(p, b, i); printf("["); print_var(p, c, i); printf("]");
                 break;
             case OP_SETTABUP:
-                print_upval(p, a); printf("["); print_const(p, b); printf("] = ");
+                print_upval(p, a);
+                if (ttisstring(&p->k[b]) && is_identifier(getstr(tsvalue(&p->k[b])))) {
+                    printf(".%s", getstr(tsvalue(&p->k[b])));
+                } else {
+                    printf("["); print_const(p, b); printf("]");
+                }
+                printf(" = ");
                 print_var(p, c, i);
                 break;
             case OP_NEWTABLE: {
@@ -330,26 +368,15 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
 
                     if (next_inst.op == OP_SETFIELD && next_inst.a == table_reg) {
                         if (items > 0) printf(", ");
-                        if (next_inst.k) print_const(p, next_inst.b); // Key is const
-                        else print_var(p, next_inst.b, next_pc);      // Key is var
 
-                        printf(" = ");
+                        if (ttisstring(&p->k[next_inst.b]) && is_identifier(getstr(tsvalue(&p->k[next_inst.b])))) {
+                            printf("%s = ", getstr(tsvalue(&p->k[next_inst.b])));
+                        } else {
+                            printf("[");
+                            print_const(p, next_inst.b);
+                            printf("] = ");
+                        }
 
-                        if (next_inst.k) print_const(p, next_inst.c); // Value is const? Wait, instruction encoding.
-                        // OP_SETFIELD A B C k.  R[A][K[B]] = RK[C].
-                        // Wait, my decode above used generic fields.
-                        // Let's check logic:
-                        // OP_SETFIELD: R[A][K[B]] = RK[C]
-                        // B is key (always const?) No, check opmode. iABC.
-                        // Actually in Lua 5.4+: SETFIELD A B C k.
-                        // R[A][k?K[B]:R[B]] = k?K[C]:R[C] ? No.
-                        // Let's assume standard printing:
-
-                        // Wait, I should use the standard printing logic reused.
-                        // print_const(p, next_inst.b) implies B is const index.
-                        // In standard decompile: `print_const(p, b)` was used for key.
-
-                        // Value:
                         if (next_inst.k) print_const(p, next_inst.c);
                         else print_var(p, next_inst.c, next_pc);
 
@@ -386,10 +413,21 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin) {
                 else printf(" (size TOP)");
                 break;
             case OP_GETFIELD:
-                print_var(p, a, i); printf(" = "); print_var(p, b, i); printf("."); print_const(p, c);
+                print_var(p, a, i); printf(" = "); print_var(p, b, i);
+                if (ttisstring(&p->k[c]) && is_identifier(getstr(tsvalue(&p->k[c])))) {
+                    printf(".%s", getstr(tsvalue(&p->k[c])));
+                } else {
+                    printf("["); print_const(p, c); printf("]");
+                }
                 break;
             case OP_SETFIELD:
-                print_var(p, a, i); printf("."); print_const(p, b); printf(" = ");
+                print_var(p, a, i);
+                if (ttisstring(&p->k[b]) && is_identifier(getstr(tsvalue(&p->k[b])))) {
+                    printf(".%s", getstr(tsvalue(&p->k[b])));
+                } else {
+                    printf("["); print_const(p, b); printf("]");
+                }
+                printf(" = ");
                 if (k) print_const(p, c);
                 else print_var(p, c, i);
                 break;
