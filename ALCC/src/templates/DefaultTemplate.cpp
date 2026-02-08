@@ -1,62 +1,125 @@
-#define LUA_CORE
+#include "DefaultTemplate.h"
+#include <iostream>
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdarg.h>
+void DefaultTemplate::disassemble(Proto* p, AlccPlugin* plugin) {
+    print_proto(p, 0, plugin);
+}
 
-#include "lua.h"
-#include "lauxlib.h"
-#include "lobject.h"
-#include "lstate.h"
-#include "lfunc.h"
-#include "lopcodes.h"
-#include "lstring.h"
-#include "lmem.h"
-#include "alcc_utils.h"
-#include "alcc_backend.h"
-#include "../plugin/alcc_plugin.h"
-
-typedef struct {
-    FILE* f;
-    int line_no;
+void DefaultTemplate::print_code(Proto* p, int level, AlccPlugin* plugin) {
     char buffer[4096];
-    AlccPlugin* plugin;
-} AssemblerCtx;
+    AlccInstruction dec;
 
-static char* get_line(ParseCtx* ctx, AlccPlugin* plugin) {
-    if (!fgets(ctx->buffer, sizeof(ctx->buffer), ctx->f)) return NULL;
-    ctx->line_no++;
-    size_t len = strlen(ctx->buffer);
-    if (len > 0 && ctx->buffer[len-1] == '\n') ctx->buffer[len-1] = '\0';
+    for (int i = 0; i < p->sizecode; i++) {
+        Instruction inst = p->code[i];
 
-    if (plugin && plugin->on_asm_line) {
-        plugin->on_asm_line(ctx, ctx->buffer);
+        current_backend->decode_instruction((uint32_t)inst, &dec);
+        const AlccOpInfo* info = current_backend->get_op_info(dec.op);
+
+        printf("%*s[%03d] ", level*2, "", i+1);
+
+        // Plugin Hook
+        if (plugin && plugin->on_instruction) {
+            if (plugin->on_instruction(p, i, buffer, sizeof(buffer))) {
+                printf("%s\n", buffer);
+                continue;
+            }
+        }
+
+        if (!info) {
+            printf("UNKNOWN(%d)\n", dec.op);
+            continue;
+        }
+
+        printf("%-12s", info->name);
+
+        switch (info->mode) {
+            case ALCC_iABC:
+                printf("%d %d %d", dec.a, dec.b, dec.c);
+                if (info->has_k && dec.k) printf(" (k)");
+                break;
+            case ALCC_ivABC:
+                printf("%d %d %d", dec.a, dec.b, dec.c);
+                if (info->has_k && dec.k) printf(" (k)");
+                break;
+            case ALCC_iABx:
+                printf("%d %d", dec.a, dec.bx);
+                break;
+            case ALCC_iAsBx:
+                printf("%d %d", dec.a, dec.bx);
+                break;
+            case ALCC_iAx:
+                printf("%d", dec.bx);
+                break;
+            case ALCC_isJ:
+                printf("%d", dec.bx);
+                if (info->has_k && dec.k) printf(" (k)");
+                break;
+        }
+
+        // Comments for constants
+        if (dec.op == OP_LOADK) {
+            int bx = dec.bx;
+            if (bx < p->sizek) {
+                TValue* k = &p->k[bx];
+                if (ttisstring(k)) {
+                    printf(" ; ");
+                    alcc_print_string(getstr(tsvalue(k)), tsslen(tsvalue(k)));
+                }
+                else if (ttisinteger(k)) printf(" ; %lld", ivalue(k));
+                else if (ttisnumber(k)) printf(" ; %f", fltvalue(k));
+            }
+        }
+
+        printf("\n");
+    }
+}
+
+void DefaultTemplate::print_proto(Proto* p, int level, AlccPlugin* plugin) {
+    if (plugin && plugin->on_disasm_header) {
+        plugin->on_disasm_header(p);
     }
 
-    return ctx->buffer;
-}
+    printf("\n%*s; Function: %p (lines %d-%d)\n", level*2, "", p, p->linedefined, p->lastlinedefined);
+    printf("%*s; NumParams: %d, IsVararg: %d, MaxStackSize: %d\n", level*2, "", p->numparams, isvararg(p), p->maxstacksize);
 
-static void parse_error(ParseCtx* ctx, const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    fprintf(stderr, "Error at line %d: ", ctx->line_no);
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
-    va_end(args);
-    exit(1);
-}
-
-static char* find_line_starting_with(ParseCtx* ctx, AlccPlugin* plugin, const char* prefix) {
-    while (get_line(ctx, plugin)) {
-        char* s = alcc_skip_space(ctx->buffer);
-        if (strncmp(s, prefix, strlen(prefix)) == 0) return s;
+    printf("%*s; Upvalues (%d):\n", level*2, "", p->sizeupvalues);
+    for (int i = 0; i < p->sizeupvalues; i++) {
+        Upvaldesc* u = &p->upvalues[i];
+        printf("%*s  [%d] ", level*2, "", i);
+        if (u->name) alcc_print_string(getstr(u->name), tsslen(u->name));
+        else printf("(no name)");
+        printf(" %d %d %d\n", u->instack, u->idx, u->kind);
     }
-    return NULL;
+
+    printf("%*s; Constants (%d):\n", level*2, "", p->sizek);
+    for (int i = 0; i < p->sizek; i++) {
+        TValue* k = &p->k[i];
+        printf("%*s  [%d] ", level*2, "", i);
+        if (ttisnumber(k)) {
+            if (ttisinteger(k)) printf("%lld", ivalue(k));
+            else printf("%f", fltvalue(k));
+        } else if (ttisstring(k)) {
+            alcc_print_string(getstr(tsvalue(k)), tsslen(tsvalue(k)));
+        } else if (ttisnil(k)) {
+            printf("nil");
+        } else if (ttisboolean(k)) {
+            printf(ttistrue(k) ? "true" : "false");
+        } else {
+            printf("type(%d)", ttype(k));
+        }
+        printf("\n");
+    }
+
+    printf("%*s; Code (%d):\n", level*2, "", p->sizecode);
+    print_code(p, level, plugin);
+
+    printf("%*s; Protos (%d):\n", level*2, "", p->sizep);
+    for (int i = 0; i < p->sizep; i++) {
+        print_proto(p->p[i], level+1, plugin);
+    }
 }
 
-static Proto* parse_proto(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
+Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
     Proto* p = luaF_newproto(L);
 
     char* line = find_line_starting_with(ctx, plugin, "; NumParams:");
@@ -268,66 +331,40 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
     if (np > 0) {
         p->p = luaM_newvector(L, np, Proto*);
         for (int i=0; i<np; i++) {
-            p->p[i] = parse_proto(L, ctx, plugin);
+            p->p[i] = assemble(L, ctx, plugin);
         }
     }
 
     return p;
 }
 
-int main(int argc, char** argv) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s input.asm -o output.luac\n", argv[0]);
-        return 1;
+char* DefaultTemplate::get_line(ParseCtx* ctx, AlccPlugin* plugin) {
+    if (!fgets(ctx->buffer, sizeof(ctx->buffer), ctx->f)) return NULL;
+    ctx->line_no++;
+    size_t len = strlen(ctx->buffer);
+    if (len > 0 && ctx->buffer[len-1] == '\n') ctx->buffer[len-1] = '\0';
+
+    if (plugin && plugin->on_asm_line) {
+        plugin->on_asm_line(ctx, ctx->buffer);
     }
 
-    const char* input_file = argv[1];
-    const char* output_file = NULL;
+    return ctx->buffer;
+}
 
-    for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-            output_file = argv[i+1];
-        }
+void DefaultTemplate::parse_error(ParseCtx* ctx, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "Error at line %d: ", ctx->line_no);
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+    exit(1);
+}
+
+char* DefaultTemplate::find_line_starting_with(ParseCtx* ctx, AlccPlugin* plugin, const char* prefix) {
+    while (get_line(ctx, plugin)) {
+        char* s = alcc_skip_space(ctx->buffer);
+        if (strncmp(s, prefix, strlen(prefix)) == 0) return s;
     }
-
-    if (!output_file) {
-        fprintf(stderr, "Output file required (-o output.luac)\n");
-        return 1;
-    }
-
-    FILE* f = fopen(input_file, "r");
-    if (!f) {
-        fprintf(stderr, "Cannot open input file %s\n", input_file);
-        return 1;
-    }
-
-    lua_State* L = alcc_newstate();
-    if (!L) return 1;
-
-    ParseCtx ctx;
-    ctx.f = f;
-    ctx.line_no = 0;
-
-    Proto* p = parse_proto(L, &ctx, NULL);
-    fclose(f);
-
-    LClosure* cl = luaF_newLclosure(L, 1);
-    cl->p = p;
-
-    setclLvalue2s(L, L->top.p, cl);
-    L->top.p++;
-
-    FILE* fout = fopen(output_file, "wb");
-    if (!fout) {
-        fprintf(stderr, "Cannot open output file %s\n", output_file);
-        return 1;
-    }
-
-    if (lua_dump(L, alcc_writer, fout, 0) != 0) {
-        fprintf(stderr, "Error dumping chunk\n");
-    }
-
-    fclose(fout);
-    lua_close(L);
-    return 0;
+    return NULL;
 }

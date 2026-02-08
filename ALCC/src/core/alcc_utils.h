@@ -2,9 +2,11 @@
 #define ALCC_UTILS_H
 
 #include <stdio.h>
+extern "C" {
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
+}
 #include "alcc_backend.h"
 
 // Global backend instance
