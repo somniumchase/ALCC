@@ -1,0 +1,14 @@
+alcc-c
+alcc-d
+alcc-a
+alcc-dec
+*.o
+*.so
+*.luac
+*.asm
+*.dec.lua
+*.log
+output.txt
+test_clean.asm
+test_new_clean.asm
+test_plugin.asm
