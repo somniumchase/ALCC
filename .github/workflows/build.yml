@@ -1,0 +1,73 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install Dependencies
+      run: sudo apt-get update && sudo apt-get install -y libreadline-dev
+
+    - name: Cache Lua Source
+      id: cache-lua
+      uses: actions/cache@v3
+      with:
+        path: lua_source
+        key: lua-source-v1-${{ runner.os }}
+
+    - name: Setup Lua
+      if: steps.cache-lua.outputs.cache-hit != 'true'
+      run: |
+        rm -rf lua_source
+        git clone https://github.com/lua/lua.git lua_source
+        cd lua_source
+        make all
+
+    - name: Ensure Lua Built (if cached)
+      if: steps.cache-lua.outputs.cache-hit == 'true'
+      run: |
+        cd lua_source
+        if [ ! -f "liblua.a" ]; then
+           make all
+        fi
+
+    - name: Build ALCC
+      run: |
+        cd ALCC
+        make
+
+    - name: Prepare Release Artifacts
+      run: |
+        mkdir -p release
+        cp ALCC/alcc ALCC/alcc-c ALCC/alcc-d ALCC/alcc-a ALCC/alcc-dec release/
+        tar -czvf alcc-linux-x64.tar.gz -C release .
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: alcc-linux-x64
+        path: alcc-linux-x64.tar.gz
+
+    - name: Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: alcc-linux-x64.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Clean ALCC Build
+      run: |
+        cd ALCC
+        make clean

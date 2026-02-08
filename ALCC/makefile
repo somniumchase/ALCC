@@ -2,7 +2,7 @@ CXX=g++
 CXXFLAGS=-O2 -Wall -I../lua_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function
 LDFLAGS=-L../lua_source -llua -lm -ldl
 
-ALL_TOOLS=alcc-c alcc-d alcc-a alcc-dec
+ALL_TOOLS=alcc-c alcc-d alcc-a alcc-dec alcc
 CORE_OBJ=src/core/alcc_utils.o src/backend/lua55.o
 TEMPLATE_OBJ=src/templates/TemplateFactory.o src/templates/DefaultTemplate.o src/templates/Template2.o
 PLUGIN_SRC=plugins/sample_plugin.cpp
@@ -36,6 +36,9 @@ alcc-a: src/assembler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 
 alcc-dec: src/decompiler.cpp $(CORE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+alcc: src/main.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
 
 $(PLUGIN_SO): $(PLUGIN_SRC)
 	$(CXX) $(CXXFLAGS) -fPIC -shared -o $@ $< $(LDFLAGS)
