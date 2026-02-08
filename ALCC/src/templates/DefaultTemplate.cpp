@@ -1,5 +1,10 @@
 #include "DefaultTemplate.h"
+#include "DecompilerCore.h"
 #include <iostream>
+
+void DefaultTemplate::decompile(Proto* p, int level, AlccPlugin* plugin) {
+    DecompilerCore::decompile(p, level, plugin);
+}
 
 void DefaultTemplate::disassemble(Proto* p, AlccPlugin* plugin) {
     print_proto(p, 0, plugin);

@@ -26,6 +26,7 @@ public:
 
     void disassemble(Proto* p, AlccPlugin* plugin) override;
     Proto* assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) override;
+    void decompile(Proto* p, int level, AlccPlugin* plugin) override;
 
 private:
     void print_proto(Proto* p, int level, AlccPlugin* plugin);

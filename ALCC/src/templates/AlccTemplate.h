@@ -22,6 +22,9 @@ public:
 
     // Assemble a function (Proto) from input context
     virtual Proto* assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) = 0;
+
+    // Decompile a function (Proto) to standard output (Lua source)
+    virtual void decompile(Proto* p, int level, AlccPlugin* plugin) = 0;
 };
 
 #endif

@@ -4,7 +4,7 @@ LDFLAGS=-L../lua_source -llua -lm -ldl
 
 ALL_TOOLS=alcc-c alcc-d alcc-a alcc-dec alcc
 CORE_OBJ=src/core/alcc_utils.o src/backend/lua55.o
-TEMPLATE_OBJ=src/templates/TemplateFactory.o src/templates/DefaultTemplate.o src/templates/Template2.o
+TEMPLATE_OBJ=src/templates/TemplateFactory.o src/templates/DefaultTemplate.o src/templates/Template2.o src/templates/DecompilerCore.o
 PLUGIN_SRC=plugins/sample_plugin.cpp
 PLUGIN_SO=plugins/sample_plugin.so
 
@@ -25,6 +25,9 @@ src/templates/DefaultTemplate.o: src/templates/DefaultTemplate.cpp src/templates
 src/templates/Template2.o: src/templates/Template2.cpp src/templates/Template2.h src/templates/AlccTemplate.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
+src/templates/DecompilerCore.o: src/templates/DecompilerCore.cpp src/templates/DecompilerCore.h src/core/alcc_utils.h
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
 alcc-c: src/compiler.cpp $(CORE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
@@ -34,7 +37,7 @@ alcc-d: src/disassembler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 alcc-a: src/assembler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-alcc-dec: src/decompiler.cpp $(CORE_OBJ)
+alcc-dec: src/decompiler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 alcc: src/main.cpp
