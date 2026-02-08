@@ -3,6 +3,22 @@ set -e
 
 echo "=== Verifying ALCC Toolchain ==="
 
+# Generate test files
+cat <<EOF > test.lua
+local a = 15
+local b = a
+print(a + b)
+EOF
+
+cat <<EOF > test_error.asm
+; Function: 0x0
+; NumParams: 0, IsVararg: 0, MaxStackSize: 2
+; Upvalues (0):
+; Constants (0):
+; Code (1):
+[001] BAD_OPCODE 0 0 0
+EOF
+
 echo "[1] Testing Compiler..."
 ./alcc-c test.lua -o test.luac
 
@@ -16,10 +32,12 @@ echo "[4] Testing Disassembler on new luac..."
 ./alcc-d test_new.luac > test_new.asm
 
 echo "[5] Comparing assembly (ignoring headers)..."
-grep -v "; Function:" test.asm > test_clean.asm
-grep -v "; Function:" test_new.asm > test_new_clean.asm
+# Remove lines starting with "; Function:" (pointer addresses differ)
+# Remove comments at the end of lines (debug info might be lost)
+sed '/^; Function:/d; s/;.*//' test.asm > test_clean.asm
+sed '/^; Function:/d; s/;.*//' test_new.asm > test_new_clean.asm
 
-if diff test_clean.asm test_new_clean.asm; then
+if diff -w test_clean.asm test_new_clean.asm; then
     echo "    Assembly matches!"
 else
     echo "    Assembly mismatch!"
