@@ -2,6 +2,7 @@ alcc-c
 alcc-d
 alcc-a
 alcc-dec
+alcc
 *.o
 *.so
 *.luac
