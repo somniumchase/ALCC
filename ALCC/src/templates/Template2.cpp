@@ -1,5 +1,10 @@
 #include "Template2.h"
+#include "DecompilerCore.h"
 #include <iostream>
+
+void Template2::decompile(Proto* p, int level, AlccPlugin* plugin) {
+    DecompilerCore::decompile(p, level, plugin);
+}
 
 void Template2::disassemble(Proto* p, AlccPlugin* plugin) {
     print_proto(p, 0, plugin);
