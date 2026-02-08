@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
 #include "lobject.h"
@@ -11,6 +12,7 @@
 #include "lfunc.h"
 #include "lopcodes.h"
 #include "lstring.h"
+}
 #include "alcc_utils.h"
 #include "alcc_backend.h"
 #include "../plugin/alcc_plugin.h"

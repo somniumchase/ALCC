@@ -6,12 +6,14 @@
 #include <ctype.h>
 #include <dlfcn.h>
 
+extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
 #include "lobject.h"
 #include "lstate.h"
 #include "lfunc.h"
 #include "lopcodes.h"
+}
 #include "alcc_utils.h"
 #include "../plugin/alcc_plugin.h"
 
