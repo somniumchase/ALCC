@@ -3,13 +3,16 @@ CFLAGS=-O2 -Wall -I../lua_source -Isrc/core -Isrc/plugin -std=c99 -DLUA_USE_LINU
 LDFLAGS=-L../lua_source -llua -lm -ldl
 
 ALL_TOOLS=alcc-c alcc-d alcc-a alcc-dec
-CORE_OBJ=src/core/alcc_utils.o
+CORE_OBJ=src/core/alcc_utils.o src/core/lua55_ops.o
 PLUGIN_SRC=plugins/sample_plugin.c
 PLUGIN_SO=plugins/sample_plugin.so
 
 all: $(ALL_TOOLS) $(PLUGIN_SO)
 
 src/core/alcc_utils.o: src/core/alcc_utils.c src/core/alcc_utils.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+src/core/lua55_ops.o: src/core/lua55_ops.c src/core/alcc_opcodes.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 alcc-c: src/compiler.c $(CORE_OBJ)

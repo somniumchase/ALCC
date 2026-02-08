@@ -24,10 +24,21 @@ void alcc_print_string(const char* s, size_t len) {
         else if (c == '\n') printf("\\n");
         else if (c == '\r') printf("\\r");
         else if (c == '\t') printf("\\t");
+        else if (c == '\a') printf("\\a");
+        else if (c == '\b') printf("\\b");
+        else if (c == '\f') printf("\\f");
+        else if (c == '\v') printf("\\v");
         else if (isprint(c)) printf("%c", c);
         else printf("\\x%02x", c);
     }
     printf("\"");
+}
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
 }
 
 char* alcc_parse_string(char* s, char* buffer) {
@@ -38,20 +49,44 @@ char* alcc_parse_string(char* s, char* buffer) {
     while (*s && *s != '"') {
         if (*s == '\\') {
             s++;
-            if (*s == 'n') *d++ = '\n';
+            if (*s == 'a') *d++ = '\a';
+            else if (*s == 'b') *d++ = '\b';
+            else if (*s == 'f') *d++ = '\f';
+            else if (*s == 'n') *d++ = '\n';
             else if (*s == 'r') *d++ = '\r';
             else if (*s == 't') *d++ = '\t';
+            else if (*s == 'v') *d++ = '\v';
             else if (*s == '\\') *d++ = '\\';
             else if (*s == '"') *d++ = '"';
+            else if (*s == '\n') *d++ = '\n'; // escaped newline
+            else if (*s == 'z') { // skip whitespace
+                s++;
+                while (*s && isspace(*s)) s++;
+                continue;
+            }
             else if (*s == 'x') {
-                int h;
-                if (sscanf(s+1, "%02x", &h) == 1) {
-                    *d++ = (char)h;
+                s++;
+                int h1 = hex_digit(s[0]);
+                int h2 = hex_digit(s[1]);
+                if (h1 >= 0 && h2 >= 0) {
+                    *d++ = (char)((h1 << 4) | h2);
                     s += 2;
-                } else {
-                    *d++ = 'x';
+                    continue;
                 }
-            } else {
+            }
+            else if (isdigit(*s)) {
+                int val = 0;
+                int c = 0;
+                while (c < 3 && isdigit(*s)) {
+                    val = val * 10 + (*s - '0');
+                    s++;
+                    c++;
+                }
+                if (val > 255) val = 255; // clamp?
+                *d++ = (char)val;
+                continue;
+            }
+            else {
                 *d++ = *s;
             }
         } else {

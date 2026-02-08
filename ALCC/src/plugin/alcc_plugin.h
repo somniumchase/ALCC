@@ -5,14 +5,24 @@
 #include "lobject.h" // For Proto
 
 typedef struct {
+    FILE* f;
+    int line_no;
+    char buffer[4096];
+} ParseCtx;
+
+typedef struct {
     const char* name;
     // Called after bytecode is loaded but before processing
     void (*post_load)(lua_State* L, Proto* p);
 
     // Called for each instruction during disassembly
-    // If it returns 1, it assumes the instruction is printed to out_buffer
-    // If it returns 0, default printing is used
     int (*on_instruction)(Proto* p, int pc, char* out_buffer, size_t buffer_size);
+
+    // Called before printing function header
+    void (*on_disasm_header)(Proto* p);
+
+    // Called when assembler reads a line
+    void (*on_asm_line)(ParseCtx* ctx, char* line);
 } AlccPlugin;
 
 typedef AlccPlugin* (*alcc_plugin_init_fn)(void);

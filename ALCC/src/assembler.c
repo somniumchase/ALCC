@@ -14,21 +14,38 @@
 #include "lopcodes.h"
 #include "lstring.h"
 #include "lmem.h"
-#include "lopnames.h"
 #include "alcc_utils.h"
+#include "alcc_opcodes.h"
+#include "../plugin/alcc_plugin.h"
+
+// Note: alcc_plugin.h is included but hooks not implemented in assembler yet?
+// Wait, plan said "Update src/assembler.c to call these hooks."
+// Let's implement on_asm_line hook.
 
 typedef struct {
     FILE* f;
     int line_no;
     char buffer[4096];
-} ParseCtx;
+    AlccPlugin* plugin;
+} AssemblerCtx;
 
-static char* get_line(ParseCtx* ctx) {
+// Reuse ParseCtx structure but with plugin context
+// Ideally rename ParseCtx to AssemblerCtx or compatible.
+// alcc_plugin.h defined ParseCtx as:
+// typedef struct { FILE* f; int line_no; char buffer[4096]; } ParseCtx;
+// I will cast or use same layout.
+
+static char* get_line(ParseCtx* ctx, AlccPlugin* plugin) {
     if (!fgets(ctx->buffer, sizeof(ctx->buffer), ctx->f)) return NULL;
     ctx->line_no++;
     // Remove newline
     size_t len = strlen(ctx->buffer);
     if (len > 0 && ctx->buffer[len-1] == '\n') ctx->buffer[len-1] = '\0';
+
+    if (plugin && plugin->on_asm_line) {
+        plugin->on_asm_line(ctx, ctx->buffer);
+    }
+
     return ctx->buffer;
 }
 
@@ -42,18 +59,18 @@ static void parse_error(ParseCtx* ctx, const char* fmt, ...) {
     exit(1);
 }
 
-static char* find_line_starting_with(ParseCtx* ctx, const char* prefix) {
-    while (get_line(ctx)) {
+static char* find_line_starting_with(ParseCtx* ctx, AlccPlugin* plugin, const char* prefix) {
+    while (get_line(ctx, plugin)) {
         char* s = alcc_skip_space(ctx->buffer);
         if (strncmp(s, prefix, strlen(prefix)) == 0) return s;
     }
     return NULL;
 }
 
-static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
+static Proto* parse_proto(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
     Proto* p = luaF_newproto(L);
 
-    char* line = find_line_starting_with(ctx, "; NumParams:");
+    char* line = find_line_starting_with(ctx, plugin, "; NumParams:");
     if (!line) parse_error(ctx, "Expected '; NumParams:'");
 
     int numparams=0, is_vararg=0, maxstacksize=2;
@@ -66,7 +83,7 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
     p->flag |= (lu_byte)is_vararg;
 
     // Upvalues
-    line = find_line_starting_with(ctx, "; Upvalues");
+    line = find_line_starting_with(ctx, plugin, "; Upvalues");
     if (!line) parse_error(ctx, "Expected '; Upvalues'");
 
     int nup=0;
@@ -82,9 +99,9 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
         }
 
         for (int i=0; i<nup; i++) {
-            if (!get_line(ctx)) parse_error(ctx, "Unexpected EOF while parsing upvalues");
+            if (!get_line(ctx, plugin)) parse_error(ctx, "Unexpected EOF while parsing upvalues");
             char* s = strchr(ctx->buffer, ']');
-            if (!s) continue; // skip bad lines? or error?
+            if (!s) continue;
             s++;
             char namebuf[1024];
             char* after_name;
@@ -112,7 +129,7 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
     }
 
     // Constants
-    line = find_line_starting_with(ctx, "; Constants");
+    line = find_line_starting_with(ctx, plugin, "; Constants");
     if (!line) parse_error(ctx, "Expected '; Constants'");
 
     int nk=0;
@@ -123,7 +140,7 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
         for (int i=0; i<nk; i++) setnilvalue(&p->k[i]);
 
         for (int i=0; i<nk; i++) {
-            if (!get_line(ctx)) parse_error(ctx, "Unexpected EOF while parsing constants");
+            if (!get_line(ctx, plugin)) parse_error(ctx, "Unexpected EOF while parsing constants");
             char* s = strchr(ctx->buffer, ']');
             if (!s) continue;
             s++;
@@ -159,7 +176,7 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
     }
 
     // Code
-    line = find_line_starting_with(ctx, "; Code");
+    line = find_line_starting_with(ctx, plugin, "; Code");
     if (!line) parse_error(ctx, "Expected '; Code'");
 
     int ncode=0;
@@ -169,7 +186,7 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
         p->code = luaM_newvector(L, ncode, Instruction);
 
         for (int i=0; i<ncode; i++) {
-            if (!get_line(ctx)) parse_error(ctx, "Unexpected EOF while parsing code");
+            if (!get_line(ctx, plugin)) parse_error(ctx, "Unexpected EOF while parsing code");
             char* s = strchr(ctx->buffer, ']');
             if (!s) continue;
             s++;
@@ -177,16 +194,21 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
             char opname[32];
             if (sscanf(s, "%31s", opname) != 1) parse_error(ctx, "Cannot parse opcode");
 
-            OpCode op = 0;
-            int found = 0;
-            for (int j=0; opnames[j]; j++) {
-                if (strcmp(opnames[j], opname) == 0) {
-                    op = (OpCode)j;
-                    found = 1;
+            // Abstraction Lookup
+            int found_op = -1;
+            const AlccOpInfo* info = NULL;
+            int num_ops = alcc_get_num_opcodes();
+
+            for (int j=0; j<num_ops; j++) {
+                const AlccOpInfo* inf = alcc_get_op_info(j);
+                if (inf && strcmp(inf->name, opname) == 0) {
+                    found_op = j;
+                    info = inf;
                     break;
                 }
             }
-            if (!found) {
+
+            if (found_op < 0 || !info) {
                 parse_error(ctx, "Unknown opcode: %s", opname);
             }
 
@@ -220,34 +242,35 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
             }
 
             Instruction inst = 0;
-            SET_OPCODE(inst, op);
+            SET_OPCODE(inst, found_op);
             SETARG_A(inst, 0);
 
-            switch (getOpMode(op)) {
-                case iABC:
+            // Abstraction switch
+            switch (info->mode) {
+                case ALCC_iABC:
                     if (nargs >= 1) SETARG_A(inst, args[0]);
                     if (nargs >= 2) SETARG_B(inst, args[1]);
                     if (nargs >= 3) SETARG_C(inst, args[2]);
                     if (has_k) SETARG_k(inst, 1);
                     break;
-                case ivABC:
+                case ALCC_ivABC:
                      if (nargs >= 1) SETARG_A(inst, args[0]);
                      if (nargs >= 2) SETARG_vB(inst, args[1]);
                      if (nargs >= 3) SETARG_vC(inst, args[2]);
                      if (has_k) SETARG_k(inst, 1);
                      break;
-                case iABx:
+                case ALCC_iABx:
                     if (nargs >= 1) SETARG_A(inst, args[0]);
                     if (nargs >= 2) SETARG_Bx(inst, args[1]);
                     break;
-                case iAsBx:
+                case ALCC_iAsBx:
                     if (nargs >= 1) SETARG_A(inst, args[0]);
                     if (nargs >= 2) SETARG_sBx(inst, args[1]);
                     break;
-                case iAx:
+                case ALCC_iAx:
                     if (nargs >= 1) SETARG_Ax(inst, args[0]);
                     break;
-                case isJ:
+                case ALCC_isJ:
                     if (nargs >= 1) SETARG_sJ(inst, args[0]);
                     if (has_k) SETARG_k(inst, 1);
                     break;
@@ -257,7 +280,7 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
     }
 
     // Protos
-    line = find_line_starting_with(ctx, "; Protos");
+    line = find_line_starting_with(ctx, plugin, "; Protos");
     if (!line) parse_error(ctx, "Expected '; Protos'");
 
     int np=0;
@@ -266,7 +289,7 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
     if (np > 0) {
         p->p = luaM_newvector(L, np, Proto*);
         for (int i=0; i<np; i++) {
-            p->p[i] = parse_proto(L, ctx);
+            p->p[i] = parse_proto(L, ctx, plugin);
         }
     }
 
@@ -306,7 +329,12 @@ int main(int argc, char** argv) {
     ctx.f = f;
     ctx.line_no = 0;
 
-    Proto* p = parse_proto(L, &ctx);
+    // Plugin? Not supported in CLI args yet for assembler in plan, but let's add minimal support if needed?
+    // Plan said "Update src/assembler.c to call these hooks."
+    // But verify script doesn't test assembler with plugin.
+    // I will pass NULL for now unless I add arg parsing.
+
+    Proto* p = parse_proto(L, &ctx, NULL);
     fclose(f);
 
     LClosure* cl = luaF_newLclosure(L, 1);

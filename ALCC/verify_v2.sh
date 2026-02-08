@@ -39,7 +39,20 @@ echo "[7] Testing Decompiler..."
 ./alcc-dec test_new.luac > test.dec.lua
 echo "    Decompiled successfully."
 
-echo "[8] Testing Plugin System..."
+echo "[8] Testing Complex Test Case..."
+./alcc-c tests/complex.lua -o complex.luac
+./alcc-d complex.luac > complex.asm
+./alcc-a complex.asm -o complex_new.luac
+../lua_source/lua complex_new.luac > complex_output.txt
+if grep -q "35" complex_output.txt && grep -q "if branch" complex_output.txt; then
+    echo "    Complex test output verification passed."
+else
+    echo "    Complex test output verification failed!"
+    cat complex_output.txt
+    exit 1
+fi
+
+echo "[9] Testing Plugin System..."
 ./alcc-d test.luac -p plugins/sample_plugin.so > test_plugin.asm
 if grep -q "\[PLUGIN\] MOVE" test_plugin.asm; then
     echo "    Plugin hooks verified!"
@@ -55,7 +68,7 @@ else
     exit 1
 fi
 
-echo "[9] Testing Assembler Error Handling..."
+echo "[10] Testing Assembler Error Handling..."
 set +e
 ./alcc-a test_error.asm -o test_error.luac > error.log 2>&1
 RET=$?
