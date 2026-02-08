@@ -44,6 +44,12 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Missing argument for -t\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--list-templates") == 0) {
+            printf("Available templates:\n");
+            for (const auto& name : TemplateFactory::instance().get_available_templates()) {
+                printf("  %s\n", name.c_str());
+            }
+            return 0;
         } else {
             input_file = argv[i];
         }
@@ -68,7 +74,10 @@ int main(int argc, char** argv) {
 
     AlccTemplate* tmpl = TemplateFactory::instance().get_template(template_name);
     if (!tmpl) {
-        fprintf(stderr, "Unknown template: %s\n", template_name);
+        fprintf(stderr, "Unknown template: %s\nAvailable templates:\n", template_name);
+        for (const auto& name : TemplateFactory::instance().get_available_templates()) {
+            fprintf(stderr, "  %s\n", name.c_str());
+        }
         return 1;
     }
 

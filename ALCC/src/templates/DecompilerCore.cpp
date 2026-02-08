@@ -436,6 +436,22 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
 
                          items++;
                          next_pc++;
+                    } else if (next_inst.op == OP_SETI && next_inst.a == table_reg) {
+                        if (items > 0) printf(", ");
+                        printf("[%d] = ", next_inst.b);
+                        if (next_inst.k) print_const(p, next_inst.c);
+                        else print_var(p, next_inst.c, next_pc);
+                        items++;
+                        next_pc++;
+                    } else if (next_inst.op == OP_SETTABLE && next_inst.a == table_reg) {
+                        if (items > 0) printf(", ");
+                        printf("[");
+                        print_var(p, next_inst.b, next_pc);
+                        printf("] = ");
+                        if (next_inst.k) print_const(p, next_inst.c);
+                        else print_var(p, next_inst.c, next_pc);
+                        items++;
+                        next_pc++;
                     } else {
                          break;
                     }
@@ -445,6 +461,14 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
                 i = next_pc - 1;
                 break;
             }
+            case OP_SETI:
+                print_var(p, a, i); printf("[%d] = ", b);
+                if (k) print_const(p, c); else print_var(p, c, i);
+                break;
+            case OP_SETTABLE:
+                print_var(p, a, i); printf("["); print_var(p, b, i); printf("] = ");
+                if (k) print_const(p, c); else print_var(p, c, i);
+                break;
             case OP_SETLIST:
                 printf("-- SETLIST "); print_var(p, a, i);
                 if (b > 0) printf(" (size %d)", b);
