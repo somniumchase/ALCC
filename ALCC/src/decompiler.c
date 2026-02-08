@@ -18,11 +18,53 @@
 #define MAX_LABELS 1000
 
 static AlccPlugin* current_plugin = NULL;
+static Proto* printed_proto_list[1000];
+static int printed_proto_count = 0;
+
+static int is_proto_printed(Proto* p) {
+    for (int i=0; i<printed_proto_count; i++) {
+        if (printed_proto_list[i] == p) return 1;
+    }
+    return 0;
+}
+
+static void set_proto_printed(Proto* p) {
+    if (printed_proto_count < 1000) {
+        printed_proto_list[printed_proto_count++] = p;
+    }
+}
 
 typedef struct {
     int targets[MAX_LABELS];
     int count;
 } JumpAnalysis;
+
+// Block Stack for structured control flow
+typedef struct {
+    int target_pc; // PC where the block ends
+    int type;      // 0: IF, 1: LOOP (handled by indent but maybe needed for break)
+} Block;
+
+typedef struct {
+    Block blocks[100];
+    int top;
+} BlockStack;
+
+static void bs_push(BlockStack* bs, int target, int type) {
+    if (bs->top < 100) {
+        bs->blocks[bs->top].target_pc = target;
+        bs->blocks[bs->top].type = type;
+        bs->top++;
+    }
+}
+
+static int bs_check_end(BlockStack* bs, int pc) {
+    if (bs->top > 0 && bs->blocks[bs->top-1].target_pc == pc) {
+        bs->top--;
+        return 1;
+    }
+    return 0;
+}
 
 static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
     ja->count = 0;
@@ -73,46 +115,13 @@ static int get_label_id(JumpAnalysis* ja, int pc) {
 }
 
 static const char* resolve_var_name(Proto* p, int reg, int pc) {
-    for (int i=0; i<p->sizelocvars; i++) {
-        LocVar* lv = &p->locvars[i];
-        // In Lua, startpc is inclusive, endpc is exclusive? Or range where valid.
-        // Usually startpc is instruction AFTER the one that initializes it.
-        // endpc is point where it goes out of scope.
-        // We will check if pc is in range [startpc, endpc).
-        if (reg == i && pc >= lv->startpc && pc < lv->endpc) { // naive mapping of reg to locvar index?
-            // Actually locvars is a list, each entry has 'startpc', 'endpc' and 'varname'.
-            // But which register?
-            // Lua saves locvars in order of declaration. They are assigned registers sequentially.
-            // But registers are reused.
-            // Wait, locvars doesn't store register index directly.
-            // In 5.4/5.5 debug info, it's just a list.
-            // The mapping reg -> locvar is complex if we don't simulate stack.
-            // However, typical debug info:
-            // 'locvars' array describes variables.
-            // We need to know which register corresponds to which variable at 'pc'.
-            // For simple code, register R[x] usually corresponds to active variable at that slot.
-            // But we don't know the slot from `LocVar` struct easily without scanning.
-            // Actually, we can just return "var_X" or use the provided name if it looks like it corresponds.
-            // Let's assume sequential assignment for parameters and then locals.
-            return getstr(lv->varname);
-        }
-    }
-
-    // Fallback: search by scope
-    // We can't easily map reg -> name without simulation.
-    // So let's stick to "R[%d]" but cleaner, or try to find a locvar active at PC that *could* be it.
-    // If we assume registers are R[0]..R[N], and locvars map to R[0]..R[M]...
-    // Actually, let's keep R[%d] for safety unless sure.
-    // But user wants "closer to original".
-    // I will return NULL and let caller decide.
-    return NULL;
+    return luaF_getlocalname(p, reg + 1, pc);
 }
 
 static void print_var(Proto* p, int reg, int pc) {
-    // Basic heuristics: if we have locvars, try to match.
-    // But without register index in LocVar, it's hard.
-    // Let's just print R[x] for now to be safe, but if user wants, we can create temp names.
-    printf("R[%d]", reg);
+    const char* name = resolve_var_name(p, reg, pc);
+    if (name) printf("%s", name);
+    else printf("R[%d]", reg);
 }
 
 static void decompile(Proto* p, int level);
@@ -132,6 +141,9 @@ static void print_const(Proto* p, int k) {
 static void decompile(Proto* p, int level) {
     JumpAnalysis ja;
     analyze_jumps(p, &ja);
+
+    BlockStack bs;
+    bs.top = 0;
 
     // Indentation level for body
     int indent = level + 1;
@@ -165,7 +177,13 @@ static void decompile(Proto* p, int level) {
 
         current_backend->decode_instruction((uint32_t)p->code[i], &dec);
 
-        // Adjust indent for end of blocks
+        // Check for end of blocks (IF/ELSE)
+        while (bs_check_end(&bs, i)) {
+            indent--;
+            printf("%*send\n", indent*2, "");
+        }
+
+        // Adjust indent for end of loops
         if (dec.op == OP_FORLOOP || dec.op == OP_TFORLOOP) indent--;
 
         printf("%*s  ", indent*2, "");
@@ -188,6 +206,20 @@ static void decompile(Proto* p, int level) {
             case OP_LOADK:
                 print_var(p, a, i); printf(" = "); print_const(p, bx);
                 break;
+            case OP_CLOSURE: {
+                Proto* sub = p->p[bx];
+                print_var(p, a, i); printf(" = ");
+                // Inline decompile
+                // We need to suppress the header "function func_..." and "end" and handle indent.
+                // But decompile() prints header.
+                // Let's refactor decompile to accept a flag?
+                // Or just print "function" here and call a body_decompile function.
+                // For now, let's just call decompile recursively and fix formatting later or accept standard output.
+                // Better:
+                decompile(sub, level + 1);
+                set_proto_printed(sub);
+                break;
+            }
             case OP_GETUPVAL:
                 print_var(p, a, i); printf(" = U[%d]", b); // TODO: Resolve upvalue name from p->upvalues[b].name
                 break;
@@ -292,12 +324,41 @@ static void decompile(Proto* p, int level) {
             case OP_NOT: print_var(p, a, i); printf(" = not "); print_var(p, b, i); break;
             case OP_LEN: print_var(p, a, i); printf(" = #"); print_var(p, b, i); break;
 
-            // Comparison (followed by JMP usually)
-            // They don't set a register, they Skip if false/true.
-            // We should print "if (a op b) ~= k then"
-            case OP_EQ: printf("if ("); print_var(p, a, i); printf(" == "); print_var(p, b, i); printf(") ~= %d then", k); break;
-            case OP_LT: printf("if ("); print_var(p, a, i); printf(" < "); print_var(p, b, i); printf(") ~= %d then", k); break;
-            case OP_LE: printf("if ("); print_var(p, a, i); printf(" <= "); print_var(p, b, i); printf(") ~= %d then", k); break;
+            // Comparison -> If
+            case OP_EQ:
+            case OP_LT:
+            case OP_LE: {
+                // Peek next instruction for JMP
+                if (i + 1 < p->sizecode) {
+                    AlccInstruction next_dec;
+                    current_backend->decode_instruction((uint32_t)p->code[i+1], &next_dec);
+                    if (next_dec.op == OP_JMP) {
+                        int dest = i + 1 + 1 + next_dec.bx; // pc+1 (next) + 1 + offset
+                        // Logic inverted: if condition met, we skip jump. If not met, we jump (to else/end).
+                        // So if we are here (not jumping), condition is TRUE (if k=1) or FALSE (if k=0)?
+                        // Lua 5.4: if ((R[A] == R[B]) ~= k) then pc++
+                        // If result is true (match k), we skip JMP.
+                        // So the block immediately following is the "THEN" block.
+                        // The JMP target is the "ELSE/END" block.
+
+                        const char* op_str = (op==OP_EQ) ? "==" : (op==OP_LT) ? "<" : "<=";
+                        printf("if ("); print_var(p, a, i); printf(" %s ", op_str); print_var(p, b, i);
+                        printf(") %s then", k ? "" : "not"); // Simplified logic
+
+                        indent++;
+                        bs_push(&bs, dest, 0);
+                        // Skip the JMP in output?
+                        // Actually we print instructions linearly. The JMP is next.
+                        // We should suppress printing the JMP if it's part of structure.
+                        // For now, let's just print structure start.
+                        break;
+                    }
+                }
+                // Fallback
+                const char* op_str = (op==OP_EQ) ? "==" : (op==OP_LT) ? "<" : "<=";
+                printf("if ("); print_var(p, a, i); printf(" %s ", op_str); print_var(p, b, i); printf(") ~= %d then", k);
+                break;
+            }
 
             // Immediate
             case OP_ADDI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" + %d", c); break; // c is sC
@@ -323,7 +384,9 @@ static void decompile(Proto* p, int level) {
     printf("%*send\n", level*2, "");
 
     for (int i=0; i<p->sizep; i++) {
-        decompile(p->p[i], level+1);
+        if (!is_proto_printed(p->p[i])) {
+            decompile(p->p[i], level+1);
+        }
     }
 }
 
