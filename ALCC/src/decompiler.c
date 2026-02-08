@@ -10,9 +10,9 @@
 #include "lstate.h"
 #include "lfunc.h"
 #include "lopcodes.h"
-#include "lopnames.h"
 #include "lstring.h"
 #include "alcc_utils.h"
+#include "alcc_opcodes.h"
 
 #define MAX_LABELS 1000
 
@@ -26,6 +26,8 @@ static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
     for (int i=0; i<p->sizecode; i++) {
         Instruction inst = p->code[i];
         OpCode op = GET_OPCODE(inst);
+
+        // Use abstract checks if possible, or just specific opcodes for logic
         if (op == OP_JMP || op == OP_FORLOOP || op == OP_FORPREP || op == OP_TFORLOOP) {
             int target = -1;
             if (op == OP_JMP) {
@@ -33,12 +35,11 @@ static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
                 target = i + 1 + sj;
             } else if (op == OP_FORLOOP || op == OP_FORPREP || op == OP_TFORLOOP) {
                 int bx = GETARG_Bx(inst);
-                target = i + 1 - bx; // FORLOOP loops back
-                if (op == OP_FORPREP) target = i + 1 + bx + 1; // FORPREP jumps forward
+                target = i + 1 - bx;
+                if (op == OP_FORPREP) target = i + 1 + bx + 1;
             }
 
             if (target >= 0 && target < p->sizecode) {
-                // Add to targets if not present
                 int found = 0;
                 for (int j=0; j<ja->count; j++) {
                     if (ja->targets[j] == target) { found=1; break; }
@@ -50,7 +51,7 @@ static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
         }
     }
 
-    // Sort targets
+    // Sort
     for (int i=0; i<ja->count-1; i++) {
         for (int j=i+1; j<ja->count; j++) {
             if (ja->targets[i] > ja->targets[j]) {
@@ -111,7 +112,6 @@ static void decompile(Proto* p, int level) {
         int k = GETARG_k(inst);
         (void)ax; (void)k;
 
-        // Print Label if exists
         int lbl = get_label_id(&ja, i);
         if (lbl >= 0) {
             printf("%*s::L%d::\n", level*2, "", lbl);
@@ -200,8 +200,11 @@ static void decompile(Proto* p, int level) {
                  printf("forloop R[%d] goto L%d", a, dest_lbl);
                  break;
             }
-            default:
-                printf("; %s %d %d %d", opnames[op], a, b, c);
+            default: {
+                const char* name = alcc_get_op_name(op);
+                if (name) printf("; %s %d %d %d", name, a, b, c);
+                else printf("; OP_%d %d %d %d", op, a, b, c);
+            }
         }
         printf("\n");
     }

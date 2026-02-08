@@ -12,8 +12,8 @@
 #include "lstate.h"
 #include "lfunc.h"
 #include "lopcodes.h"
-#include "lopnames.h"
 #include "alcc_utils.h"
+#include "alcc_opcodes.h"
 #include "../plugin/alcc_plugin.h"
 
 static AlccPlugin* current_plugin = NULL;
@@ -25,7 +25,8 @@ static void print_code(Proto* p, int level) {
 
     for (int i = 0; i < p->sizecode; i++) {
         Instruction inst = p->code[i];
-        OpCode op = GET_OPCODE(inst);
+        int op_val = GET_OPCODE(inst);
+        const AlccOpInfo* info = alcc_get_op_info(op_val);
 
         printf("%*s[%03d] ", level*2, "", i+1);
 
@@ -37,36 +38,47 @@ static void print_code(Proto* p, int level) {
             }
         }
 
-        printf("%-12s", opnames[op]);
+        if (!info) {
+            printf("UNKNOWN(%d)\n", op_val);
+            continue;
+        }
+
+        printf("%-12s", info->name);
 
         int a = GETARG_A(inst);
 
-        switch (getOpMode(op)) {
-            case iABC:
+        switch (info->mode) {
+            case ALCC_iABC:
                 printf("%d %d %d", a, GETARG_B(inst), GETARG_C(inst));
-                if (GETARG_k(inst)) printf(" (k)");
+                if (info->has_k && GETARG_k(inst)) printf(" (k)");
                 break;
-            case ivABC:
+            case ALCC_ivABC:
                 printf("%d %d %d", a, GETARG_vB(inst), GETARG_vC(inst));
-                if (GETARG_k(inst)) printf(" (k)");
+                if (info->has_k && GETARG_k(inst)) printf(" (k)");
                 break;
-            case iABx:
+            case ALCC_iABx:
                 printf("%d %d", a, GETARG_Bx(inst));
                 break;
-            case iAsBx:
+            case ALCC_iAsBx:
                 printf("%d %d", a, GETARG_sBx(inst));
                 break;
-            case iAx:
+            case ALCC_iAx:
                 printf("%d", GETARG_Ax(inst));
                 break;
-            case isJ:
+            case ALCC_isJ:
                 printf("%d", GETARG_sJ(inst));
-                if (GETARG_k(inst)) printf(" (k)");
+                if (info->has_k && GETARG_k(inst)) printf(" (k)");
                 break;
         }
 
         // Comments for constants
-        if (op == OP_LOADK) {
+        // Note: checking logic based on op name or hardcoded logic?
+        // Usually dependent on opcode semantics.
+        // For now, keep the specific check for OP_LOADK as it's the main one.
+        // We can check name string if we want to be pure abstract, but comparing strings is slow.
+        // Or we assume standard Lua opcodes for semantics.
+        // Let's use the GET_OPCODE(inst) which is standard enum.
+        if (op_val == OP_LOADK) {
             int bx = GETARG_Bx(inst);
             if (bx < p->sizek) {
                 TValue* k = &p->k[bx];
@@ -84,6 +96,10 @@ static void print_code(Proto* p, int level) {
 }
 
 static void print_proto(Proto* p, int level) {
+    if (current_plugin && current_plugin->on_disasm_header) {
+        current_plugin->on_disasm_header(p);
+    }
+
     printf("\n%*s; Function: %p (lines %d-%d)\n", level*2, "", p, p->linedefined, p->lastlinedefined);
     printf("%*s; NumParams: %d, IsVararg: %d, MaxStackSize: %d\n", level*2, "", p->numparams, isvararg(p), p->maxstacksize);
 

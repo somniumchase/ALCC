@@ -6,6 +6,10 @@ This project implements a toolchain for Lua 5.5 bytecode manipulation:
 - **alcc-a**: Assembler (Assembly -> Bytecode)
 - **alcc-dec**: Decompiler (Bytecode -> Source Pseudo-code)
 
+## Architecture
+- **Core**: `src/core/alcc_opcodes.h` and `src/core/lua55_ops.c` provide an abstraction layer for Lua 5.5 opcodes, allowing easier porting to future versions.
+- **Plugins**: `src/plugin/alcc_plugin.h` defines hooks for extending tool functionality.
+
 ## Building
 ```bash
 make
