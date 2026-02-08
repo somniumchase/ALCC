@@ -4,11 +4,7 @@
 
 #include "lua.h"
 #include "lauxlib.h"
-
-static int writer(lua_State* L, const void* p, size_t sz, void* ud) {
-    (void)L;
-    return (fwrite(p, sz, 1, (FILE*)ud) != 1) && (sz != 0);
-}
+#include "alcc_utils.h"
 
 int main(int argc, char** argv) {
     if (argc < 3) {
@@ -26,12 +22,11 @@ int main(int argc, char** argv) {
     }
 
     if (!output_file) {
-        // Fallback or error? Let's require -o for now as per plan
         fprintf(stderr, "Output file required (-o output.luac)\n");
         return 1;
     }
 
-    lua_State* L = luaL_newstate();
+    lua_State* L = alcc_newstate();
     if (!L) {
         fprintf(stderr, "Cannot create state\n");
         return 1;
@@ -51,7 +46,7 @@ int main(int argc, char** argv) {
     }
 
     // strip=0 (keep debug info)
-    if (lua_dump(L, writer, f, 0) != 0) {
+    if (lua_dump(L, alcc_writer, f, 0) != 0) {
         fprintf(stderr, "Error dumping chunk\n");
         fclose(f);
         lua_close(L);

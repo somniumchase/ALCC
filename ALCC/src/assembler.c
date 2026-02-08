@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdarg.h>
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -14,95 +15,84 @@
 #include "lstring.h"
 #include "lmem.h"
 #include "lopnames.h"
+#include "alcc_utils.h"
 
-// Helper to skip whitespace
-static char* skip_space(char* s) {
-    while (*s && isspace(*s)) s++;
-    return s;
+typedef struct {
+    FILE* f;
+    int line_no;
+    char buffer[4096];
+} ParseCtx;
+
+static char* get_line(ParseCtx* ctx) {
+    if (!fgets(ctx->buffer, sizeof(ctx->buffer), ctx->f)) return NULL;
+    ctx->line_no++;
+    // Remove newline
+    size_t len = strlen(ctx->buffer);
+    if (len > 0 && ctx->buffer[len-1] == '\n') ctx->buffer[len-1] = '\0';
+    return ctx->buffer;
 }
 
-// Parse quoted string unescaping
-static char* parse_string(char* s, char* buffer) {
-    s = skip_space(s);
-    if (*s != '"') return NULL;
-    s++;
-    char* d = buffer;
-    while (*s && *s != '"') {
-        if (*s == '\\') {
-            s++;
-            if (*s == 'n') *d++ = '\n';
-            else if (*s == 'r') *d++ = '\r';
-            else if (*s == 't') *d++ = '\t';
-            else if (*s == '\\') *d++ = '\\';
-            else if (*s == '"') *d++ = '"';
-            else if (*s == 'x') {
-                int h;
-                if (sscanf(s+1, "%02x", &h) == 1) {
-                    *d++ = (char)h;
-                    s += 2;
-                } else {
-                    *d++ = 'x';
-                }
-            } else {
-                *d++ = *s;
-            }
-        } else {
-            *d++ = *s;
-        }
-        s++;
+static void parse_error(ParseCtx* ctx, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "Error at line %d: ", ctx->line_no);
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+    exit(1);
+}
+
+static char* find_line_starting_with(ParseCtx* ctx, const char* prefix) {
+    while (get_line(ctx)) {
+        char* s = alcc_skip_space(ctx->buffer);
+        if (strncmp(s, prefix, strlen(prefix)) == 0) return s;
     }
-    *d = '\0';
-    if (*s == '"') s++;
-    return s;
+    return NULL;
 }
 
-static Proto* parse_proto(lua_State* L, FILE* f) {
-    char line[4096];
+static Proto* parse_proto(lua_State* L, ParseCtx* ctx) {
     Proto* p = luaF_newproto(L);
 
-    // Parse NumParams
-    while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "; NumParams:")) break;
-    }
+    char* line = find_line_starting_with(ctx, "; NumParams:");
+    if (!line) parse_error(ctx, "Expected '; NumParams:'");
 
     int numparams=0, is_vararg=0, maxstacksize=2;
-    char* s_head = strstr(line, "; NumParams:");
-    if (s_head) sscanf(s_head, "; NumParams: %d, IsVararg: %d, MaxStackSize: %d",
-           &numparams, &is_vararg, &maxstacksize);
+    if (sscanf(line, "; NumParams: %d, IsVararg: %d, MaxStackSize: %d",
+           &numparams, &is_vararg, &maxstacksize) != 3) {
+        parse_error(ctx, "Invalid NumParams format");
+    }
     p->numparams = (lu_byte)numparams;
     p->maxstacksize = (lu_byte)maxstacksize;
     p->flag |= (lu_byte)is_vararg;
 
-    // Parse Upvalues
-    while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "; Upvalues")) break;
-    }
+    // Upvalues
+    line = find_line_starting_with(ctx, "; Upvalues");
+    if (!line) parse_error(ctx, "Expected '; Upvalues'");
+
     int nup=0;
-    char* s_up = strstr(line, "; Upvalues");
-    if (s_up) sscanf(s_up, "; Upvalues (%d):", &nup);
+    sscanf(line, "; Upvalues (%d):", &nup);
     p->sizeupvalues = nup;
     if (nup > 0) {
         p->upvalues = luaM_newvector(L, nup, Upvaldesc);
         for (int i=0; i<nup; i++) {
-            p->upvalues[i].name = NULL;
-            p->upvalues[i].instack = 0;
-            p->upvalues[i].idx = 0;
-            p->upvalues[i].kind = 0;
+             p->upvalues[i].name = NULL;
+             p->upvalues[i].instack = 0;
+             p->upvalues[i].idx = 0;
+             p->upvalues[i].kind = 0;
         }
 
         for (int i=0; i<nup; i++) {
-            if (!fgets(line, sizeof(line), f)) break;
-            char* s = strchr(line, ']');
-            if (!s) continue;
+            if (!get_line(ctx)) parse_error(ctx, "Unexpected EOF while parsing upvalues");
+            char* s = strchr(ctx->buffer, ']');
+            if (!s) continue; // skip bad lines? or error?
             s++;
             char namebuf[1024];
             char* after_name;
 
-            s = skip_space(s);
+            s = alcc_skip_space(s);
             if (*s == '"') {
-                after_name = parse_string(s, namebuf);
+                after_name = alcc_parse_string(s, namebuf);
             } else {
-                // (no name)
                 strcpy(namebuf, "");
                 after_name = strchr(s, ')');
                 if (after_name) after_name++;
@@ -121,27 +111,27 @@ static Proto* parse_proto(lua_State* L, FILE* f) {
         }
     }
 
-    // Parse Constants
-    while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "; Constants")) break;
-    }
+    // Constants
+    line = find_line_starting_with(ctx, "; Constants");
+    if (!line) parse_error(ctx, "Expected '; Constants'");
+
     int nk=0;
-    char* s_k = strstr(line, "; Constants");
-    if (s_k) sscanf(s_k, "; Constants (%d):", &nk);
+    sscanf(line, "; Constants (%d):", &nk);
     p->sizek = nk;
     if (nk > 0) {
         p->k = luaM_newvector(L, nk, TValue);
         for (int i=0; i<nk; i++) setnilvalue(&p->k[i]);
 
         for (int i=0; i<nk; i++) {
-            if (!fgets(line, sizeof(line), f)) break;
-            char* s = strchr(line, ']');
+            if (!get_line(ctx)) parse_error(ctx, "Unexpected EOF while parsing constants");
+            char* s = strchr(ctx->buffer, ']');
             if (!s) continue;
             s++;
-            s = skip_space(s);
+            s = alcc_skip_space(s);
+
             if (*s == '"') {
                 char buf[4096];
-                parse_string(s, buf);
+                alcc_parse_string(s, buf);
                 setsvalue(L, &p->k[i], luaS_new(L, buf));
             } else if (strncmp(s, "nil", 3) == 0) {
                 setnilvalue(&p->k[i]);
@@ -159,7 +149,6 @@ static Proto* parse_proto(lua_State* L, FILE* f) {
                     if (sscanf(s, "%lld", &li) == 1) {
                          setivalue(&p->k[i], li);
                     } else {
-                         // Fallback to float if integer parse fails (e.g. overflow or weird format)
                          lua_Number ln;
                          sscanf(s, "%lf", &ln);
                          setfltvalue(&p->k[i], ln);
@@ -169,24 +158,24 @@ static Proto* parse_proto(lua_State* L, FILE* f) {
         }
     }
 
-    // Parse Code
-    while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "; Code")) break;
-    }
+    // Code
+    line = find_line_starting_with(ctx, "; Code");
+    if (!line) parse_error(ctx, "Expected '; Code'");
+
     int ncode=0;
-    char* s_code = strstr(line, "; Code");
-    if (s_code) sscanf(s_code, "; Code (%d):", &ncode);
+    sscanf(line, "; Code (%d):", &ncode);
     p->sizecode = ncode;
     if (ncode > 0) {
         p->code = luaM_newvector(L, ncode, Instruction);
 
         for (int i=0; i<ncode; i++) {
-            if (!fgets(line, sizeof(line), f)) break;
-            char* s = strchr(line, ']');
+            if (!get_line(ctx)) parse_error(ctx, "Unexpected EOF while parsing code");
+            char* s = strchr(ctx->buffer, ']');
             if (!s) continue;
             s++;
+
             char opname[32];
-            sscanf(s, "%s", opname);
+            if (sscanf(s, "%31s", opname) != 1) parse_error(ctx, "Cannot parse opcode");
 
             OpCode op = 0;
             int found = 0;
@@ -198,33 +187,27 @@ static Proto* parse_proto(lua_State* L, FILE* f) {
                 }
             }
             if (!found) {
-                fprintf(stderr, "Unknown opcode: %s\n", opname);
-                continue;
+                parse_error(ctx, "Unknown opcode: %s", opname);
             }
 
-            s = strstr(s, opname) + strlen(opname);
+            s = strstr(s, opname);
+            if (!s) parse_error(ctx, "Internal error parsing opname");
+            s += strlen(opname);
 
             int args[10];
             int nargs = 0;
             char* ptr = s;
             int has_k = 0;
-            if (strstr(line, "(k)")) has_k = 1;
+            if (strstr(ctx->buffer, "(k)")) has_k = 1;
 
             while (*ptr) {
                 while (*ptr && !isdigit(*ptr) && *ptr != '-') {
-                     if (*ptr == '\n') break;
+                     if (*ptr == '\0') break;
+                     // Stop if comment
+                     if (*ptr == ';') { *ptr = '\0'; break; }
                      ptr++;
                 }
-                if (!*ptr || *ptr == '\n') break;
-
-                // Check if it's part of "(k)" or "; comment"
-                // Actually my disassembler output: "LOADK 1 1 ; ..."
-                // The comment is after a ';'.
-                // So I should stop at ';'
-                // Wait, my loop above:
-                // I need to strip comments first.
-                // But my `parse_string` logic might be tricky if `;` is inside string.
-                // But here I am parsing args (integers).
+                if (!*ptr) break;
 
                 int val;
                 if (sscanf(ptr, "%d", &val) == 1) {
@@ -273,27 +256,21 @@ static Proto* parse_proto(lua_State* L, FILE* f) {
         }
     }
 
-    // Parse Protos
-    while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "; Protos")) break;
-    }
+    // Protos
+    line = find_line_starting_with(ctx, "; Protos");
+    if (!line) parse_error(ctx, "Expected '; Protos'");
+
     int np=0;
-    char* s_p = strstr(line, "; Protos");
-    if (s_p) sscanf(s_p, "; Protos (%d):", &np);
+    sscanf(line, "; Protos (%d):", &np);
     p->sizep = np;
     if (np > 0) {
         p->p = luaM_newvector(L, np, Proto*);
         for (int i=0; i<np; i++) {
-            p->p[i] = parse_proto(L, f);
+            p->p[i] = parse_proto(L, ctx);
         }
     }
 
     return p;
-}
-
-static int writer(lua_State* L, const void* p, size_t sz, void* ud) {
-    (void)L;
-    return (fwrite(p, sz, 1, (FILE*)ud) != 1) && (sz != 0);
 }
 
 int main(int argc, char** argv) {
@@ -322,23 +299,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    lua_State* L = luaL_newstate();
+    lua_State* L = alcc_newstate();
     if (!L) return 1;
-    lua_gc(L, LUA_GCSTOP, 0); // Stop GC to prevent collection of unanchored protos
 
-    Proto* p = parse_proto(L, f);
+    ParseCtx ctx;
+    ctx.f = f;
+    ctx.line_no = 0;
+
+    Proto* p = parse_proto(L, &ctx);
     fclose(f);
 
-    // Create LClosure to dump
-    // We need to push it to stack.
-    // LClosure needs a GCObject.
-    // luaF_newLclosure(L, nup)
-    LClosure* cl = luaF_newLclosure(L, 1); // 1 upvalue (_ENV)
+    LClosure* cl = luaF_newLclosure(L, 1);
     cl->p = p;
-    // Set upvalue 0 to _ENV?
-    // Usually main chunk has _ENV as upvalue 0.
-    // But lua_dump doesn't really care about the value of upvalue, only the name in Proto for debug.
-    // However, lua_dump expects top of stack to be the function.
 
     setclLvalue2s(L, L->top.p, cl);
     L->top.p++;
@@ -349,7 +321,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (lua_dump(L, writer, fout, 0) != 0) {
+    if (lua_dump(L, alcc_writer, fout, 0) != 0) {
         fprintf(stderr, "Error dumping chunk\n");
     }
 

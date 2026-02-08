@@ -12,12 +12,15 @@
 #include "lopcodes.h"
 #include "lopnames.h"
 #include "lstring.h"
+#include "alcc_utils.h"
 
 static void decompile(Proto* p, int level);
 
 static void print_const(Proto* p, int k) {
     TValue* val = &p->k[k];
-    if (ttisstring(val)) printf("\"%s\"", getstr(tsvalue(val)));
+    if (ttisstring(val)) {
+        alcc_print_string(getstr(tsvalue(val)), tsslen(tsvalue(val)));
+    }
     else if (ttisinteger(val)) printf("%lld", ivalue(val));
     else if (ttisnumber(val)) printf("%f", fltvalue(val));
     else if (ttisnil(val)) printf("nil");
@@ -76,8 +79,7 @@ static void decompile(Proto* p, int level) {
             case OP_SETUPVAL:
                 printf("U[%d] = R[%d]", b, a);
                 break;
-            case OP_GETTABUP: // R[A] := UpValue[B][K[C]]
-                // Wait, C is index into K? Yes, usually.
+            case OP_GETTABUP:
                 printf("local R[%d] = U[%d][", a, b);
                 print_const(p, c);
                 printf("]");
@@ -89,33 +91,12 @@ static void decompile(Proto* p, int level) {
                 printf("U[%d][", a);
                 print_const(p, b);
                 printf("] = ");
-                // C is RK? In 5.5, SETTABUP A B C.
-                // Wait, is C register or constant?
-                // OpMode is iABC.
-                // Usually it depends on instruction definition.
-                // OP_SETTABUP: UpValue[A][K[B]:shortstring] := RK(C)
-                // K[B] is string.
-                // RK(C)? No, in 5.5 it seems specific.
-                // Let's look at lopcodes.h comments:
-                // OP_SETTABUP A B C  UpValue[A][K[B]:shortstring] := RK(C)
-                // RK(C)? How is RK encoded?
-                // In 5.4+, RK is gone mostly. It uses separate instructions or flag k?
-                // "k" bit in instruction?
-                // OP_SETTABUP has iABC, no k bit in mode (0,0,0,0,0,iABC).
-                // Wait, lopcodes.c: opmode(0, 0, 0, 0, 0, iABC)
-                // It does NOT have k bit.
-                // So C is Register?
-                // But comment says RK(C).
-                // Maybe it means it handles both?
-                // Or maybe the comment is outdated or I misread?
-                // Actually 5.4 uses subtables/special instructions.
-                // Let's just print R[C] for now.
-                printf("R[%d]", c); // or K[C]?
+                printf("R[%d]", c);
                 break;
 
-            case OP_CALL: // R[A]... := R[A](R[A+1]...)
+            case OP_CALL:
                 if (c==0) printf("multret = ");
-                else if (c==1) printf(""); // No return
+                else if (c==1) {} // No return
                 else if (c==2) printf("R[%d] = ", a); // 1 return
                 else printf("R[%d]..R[%d] = ", a, a+c-2);
 
@@ -172,7 +153,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    lua_State* L = luaL_newstate();
+    lua_State* L = alcc_newstate();
+    if (!L) return 1;
+
     if (luaL_loadfile(L, argv[1]) != LUA_OK) {
         fprintf(stderr, "Error loading file: %s\n", lua_tostring(L, -1));
         return 1;

@@ -33,5 +33,16 @@ Note: Requires `../lua_source` to be built (run `make` inside `lua_source`).
 ./alcc-dec input.luac > output.lua
 ```
 
+### Plugin System
+The disassembler supports plugins to customize output.
+To build the sample plugin:
+```bash
+make plugins/sample_plugin.so
+```
+To run with plugin:
+```bash
+./alcc-d input.luac -p plugins/sample_plugin.so
+```
+
 ## Testing
-Run `./verify.sh`.
+Run `./verify_v2.sh`.
