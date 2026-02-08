@@ -104,6 +104,16 @@ static int bs_check_end(BlockStack* bs, int pc, Proto* p) {
     return 0;
 }
 
+// Helper to check if a variable is marked as to-close (OP_TBC follows)
+static int is_toclose(Proto* p, int pc, int reg) {
+    if (pc + 1 < p->sizecode) {
+        AlccInstruction next;
+        current_backend->decode_instruction((uint32_t)p->code[pc+1], &next);
+        if (next.op == OP_TBC && next.a == reg) return 1;
+    }
+    return 0;
+}
+
 static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
     ja->count = 0;
     AlccInstruction dec;
@@ -356,17 +366,24 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
 
         switch(op) {
             case OP_MOVE:
-                print_var(p, a, i); printf(" = "); print_var(p, b, i);
+                print_var(p, a, i);
+                if (is_toclose(p, i, a)) printf(" <toclose>");
+                printf(" = "); print_var(p, b, i);
                 break;
             case OP_LOADI:
             case OP_LOADF:
-                print_var(p, a, i); printf(" = %d", bx);
+                print_var(p, a, i);
+                if (is_toclose(p, i, a)) printf(" <toclose>");
+                printf(" = %d", bx);
                 break;
             case OP_LOADK:
-                print_var(p, a, i); printf(" = "); print_const(p, bx);
+                print_var(p, a, i);
+                if (is_toclose(p, i, a)) printf(" <toclose>");
+                printf(" = "); print_const(p, bx);
                 break;
             case OP_VARARG:
                 print_var(p, a, i);
+                if (is_toclose(p, i, a)) printf(" <toclose>");
                 if (c > 1) {
                     for (int j=1; j<c; j++) {
                         printf(", "); print_var(p, a+j, i);
@@ -408,6 +425,18 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
                             final_name = name_buf;
                             has_name = 1;
                             skip_next = 1;
+                        }
+                    } else if (next.op == OP_SETFIELD && next.c == a && next.k == 0) {
+                        // SETFIELD A B C k=0. R[A][K[B]] = R[C].
+                        if (next.b < p->sizek && ttisstring(&p->k[next.b]) && is_identifier(getstr(tsvalue(&p->k[next.b])))) {
+                             const char* field = getstr(tsvalue(&p->k[next.b]));
+                             const char* base = luaF_getlocalname(p, next.a + 1, i + 1);
+                             if (base) {
+                                 snprintf(name_buf, sizeof(name_buf), "function %s.%s", base, field);
+                                 final_name = name_buf;
+                                 has_name = 1;
+                                 skip_next = 1;
+                             }
                         }
                     }
                 }
@@ -529,9 +558,15 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
                 if (k) print_const(p, c); else print_var(p, c, i);
                 break;
             case OP_SETLIST:
-                printf("-- SETLIST "); print_var(p, a, i);
-                if (b > 0) printf(" (size %d)", b);
-                else printf(" (size TOP)");
+                printf("setlist("); print_var(p, a, i);
+                if (b == 0) {
+                     printf(", ...)"); // TOP
+                } else {
+                     for (int j=1; j<=b; j++) {
+                         printf(", "); print_var(p, a+j, i);
+                     }
+                     printf(")");
+                }
                 break;
             case OP_GETFIELD:
                 print_var(p, a, i); printf(" = "); print_var(p, b, i);
@@ -559,7 +594,11 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
             case OP_CALL:
                 if (c==0) printf("multret = ");
                 else if (c==1) {}
-                else if (c==2) { print_var(p, a, i); printf(" = "); }
+                else if (c==2) {
+                    print_var(p, a, i);
+                    if (is_toclose(p, i, a)) printf(" <toclose>");
+                    printf(" = ");
+                }
                 else printf("R[%d].. = ", a);
 
                 print_var(p, a, i); printf("(");
@@ -819,10 +858,18 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
             case OP_SHLI: print_var(p, a, i); printf(" = %d << ", c - OFFSET_sC); print_var(p, b, i); break;
             case OP_SHRI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" >> %d", c - OFFSET_sC); break;
 
+            case OP_TBC:
+                // Handled in assignment
+                break;
+
             case OP_MMBIN:
             case OP_MMBINI:
             case OP_MMBINK:
                 printf("-- mmbin");
+                break;
+
+            case OP_CLOSE:
+                printf("close_scope("); print_var(p, a, i); printf(")");
                 break;
 
             default: {
