@@ -4,7 +4,8 @@ LDFLAGS=-L../lua_source -llua -lm -ldl
 
 ALL_TOOLS=alcc-c alcc-d alcc-a alcc-dec alcc
 CORE_OBJ=src/core/alcc_utils.o src/backend/lua55.o
-TEMPLATE_OBJ=src/templates/TemplateFactory.o src/templates/DefaultTemplate.o src/templates/Template2.o src/templates/DecompilerCore.o
+AST_OBJ=src/ast/AST.o src/ast/ASTPrinter.o
+TEMPLATE_OBJ=src/templates/TemplateFactory.o src/templates/DefaultTemplate.o src/templates/Template2.o src/templates/DecompilerCore.o $(AST_OBJ)
 PLUGIN_SRC=plugins/sample_plugin.cpp
 PLUGIN_SO=plugins/sample_plugin.so
 
@@ -26,6 +27,12 @@ src/templates/Template2.o: src/templates/Template2.cpp src/templates/Template2.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 src/templates/DecompilerCore.o: src/templates/DecompilerCore.cpp src/templates/DecompilerCore.h src/core/alcc_utils.h
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+src/ast/AST.o: src/ast/AST.cpp src/ast/AST.h
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+src/ast/ASTPrinter.o: src/ast/ASTPrinter.cpp src/ast/ASTPrinter.h src/ast/AST.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 alcc-c: src/compiler.cpp $(CORE_OBJ)

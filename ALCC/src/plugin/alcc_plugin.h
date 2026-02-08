@@ -30,6 +30,9 @@ typedef struct {
 
     // Called when decompiling an instruction. Return 1 if handled.
     int (*on_decompile_inst)(Proto* p, int pc, char* out_buffer, size_t buffer_size);
+
+    // Called after AST is built, before printing. root is ASTNode*.
+    void (*on_ast_process)(void* root);
 } AlccPlugin;
 
 typedef AlccPlugin* (*alcc_plugin_init_fn)(void);
