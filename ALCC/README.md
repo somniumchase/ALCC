@@ -7,8 +7,9 @@ This project implements a toolchain for Lua 5.5 bytecode manipulation:
 - **alcc-dec**: Decompiler (Bytecode -> Source Pseudo-code)
 
 ## Architecture
-- **Core**: `src/core/alcc_opcodes.h` and `src/core/lua55_ops.c` provide an abstraction layer for Lua 5.5 opcodes, allowing easier porting to future versions.
-- **Plugins**: `src/plugin/alcc_plugin.h` defines hooks for extending tool functionality.
+- **Core**: `src/core/alcc_backend.h` defines a generic interface for opcode handling.
+- **Backend**: `src/backend/lua55.c` implements the interface for Lua 5.5, encapsulating version-specific logic. This allows easy extension to future Lua versions (e.g. 5.6) by adding a new backend.
+- **Plugins**: `src/plugin/alcc_plugin.h` defines hooks for extending tool functionality (instruction printing, header analysis, assembly line modification, decompilation).
 
 ## Building
 ```bash

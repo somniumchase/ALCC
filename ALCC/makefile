@@ -3,16 +3,16 @@ CFLAGS=-O2 -Wall -I../lua_source -Isrc/core -Isrc/plugin -std=c99 -DLUA_USE_LINU
 LDFLAGS=-L../lua_source -llua -lm -ldl
 
 ALL_TOOLS=alcc-c alcc-d alcc-a alcc-dec
-CORE_OBJ=src/core/alcc_utils.o src/core/lua55_ops.o
+CORE_OBJ=src/core/alcc_utils.o src/backend/lua55.o
 PLUGIN_SRC=plugins/sample_plugin.c
 PLUGIN_SO=plugins/sample_plugin.so
 
 all: $(ALL_TOOLS) $(PLUGIN_SO)
 
-src/core/alcc_utils.o: src/core/alcc_utils.c src/core/alcc_utils.h
+src/core/alcc_utils.o: src/core/alcc_utils.c src/core/alcc_utils.h src/core/alcc_backend.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-src/core/lua55_ops.o: src/core/lua55_ops.c src/core/alcc_opcodes.h
+src/backend/lua55.o: src/backend/lua55.c src/core/alcc_backend.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 alcc-c: src/compiler.c $(CORE_OBJ)
@@ -31,4 +31,4 @@ $(PLUGIN_SO): $(PLUGIN_SRC)
 	$(CC) $(CFLAGS) -fPIC -shared -o $@ $< $(LDFLAGS)
 
 clean:
-	rm -f $(ALL_TOOLS) src/core/*.o plugins/*.so
+	rm -f $(ALL_TOOLS) src/core/*.o src/backend/*.o plugins/*.so

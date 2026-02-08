@@ -3,6 +3,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+// Default backend
+extern AlccBackend alcc_lua55_backend;
+AlccBackend* current_backend = &alcc_lua55_backend;
+
 lua_State* alcc_newstate(void) {
     lua_State* L = luaL_newstate();
     if (!L) return NULL;

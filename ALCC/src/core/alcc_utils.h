@@ -5,6 +5,10 @@
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
+#include "alcc_backend.h"
+
+// Global backend instance
+extern AlccBackend* current_backend;
 
 // Initialize a new Lua state for tools
 lua_State* alcc_newstate(void);

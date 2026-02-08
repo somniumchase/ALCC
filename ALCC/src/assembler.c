@@ -15,12 +15,8 @@
 #include "lstring.h"
 #include "lmem.h"
 #include "alcc_utils.h"
-#include "alcc_opcodes.h"
+#include "alcc_backend.h"
 #include "../plugin/alcc_plugin.h"
-
-// Note: alcc_plugin.h is included but hooks not implemented in assembler yet?
-// Wait, plan said "Update src/assembler.c to call these hooks."
-// Let's implement on_asm_line hook.
 
 typedef struct {
     FILE* f;
@@ -29,16 +25,9 @@ typedef struct {
     AlccPlugin* plugin;
 } AssemblerCtx;
 
-// Reuse ParseCtx structure but with plugin context
-// Ideally rename ParseCtx to AssemblerCtx or compatible.
-// alcc_plugin.h defined ParseCtx as:
-// typedef struct { FILE* f; int line_no; char buffer[4096]; } ParseCtx;
-// I will cast or use same layout.
-
 static char* get_line(ParseCtx* ctx, AlccPlugin* plugin) {
     if (!fgets(ctx->buffer, sizeof(ctx->buffer), ctx->f)) return NULL;
     ctx->line_no++;
-    // Remove newline
     size_t len = strlen(ctx->buffer);
     if (len > 0 && ctx->buffer[len-1] == '\n') ctx->buffer[len-1] = '\0';
 
@@ -194,13 +183,13 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
             char opname[32];
             if (sscanf(s, "%31s", opname) != 1) parse_error(ctx, "Cannot parse opcode");
 
-            // Abstraction Lookup
+            // Abstraction Lookup using Backend
             int found_op = -1;
             const AlccOpInfo* info = NULL;
-            int num_ops = alcc_get_num_opcodes();
+            int num_ops = current_backend->get_op_count();
 
             for (int j=0; j<num_ops; j++) {
-                const AlccOpInfo* inf = alcc_get_op_info(j);
+                const AlccOpInfo* inf = current_backend->get_op_info(j);
                 if (inf && strcmp(inf->name, opname) == 0) {
                     found_op = j;
                     info = inf;
@@ -241,41 +230,31 @@ static Proto* parse_proto(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
                 }
             }
 
-            Instruction inst = 0;
-            SET_OPCODE(inst, found_op);
-            SETARG_A(inst, 0);
+            AlccInstruction enc;
+            enc.op = found_op;
+            enc.a = (nargs >= 1) ? args[0] : 0;
+            enc.b = 0; enc.c = 0; enc.k = 0; enc.bx = 0;
 
-            // Abstraction switch
+            // Map args based on mode
             switch (info->mode) {
                 case ALCC_iABC:
-                    if (nargs >= 1) SETARG_A(inst, args[0]);
-                    if (nargs >= 2) SETARG_B(inst, args[1]);
-                    if (nargs >= 3) SETARG_C(inst, args[2]);
-                    if (has_k) SETARG_k(inst, 1);
-                    break;
                 case ALCC_ivABC:
-                     if (nargs >= 1) SETARG_A(inst, args[0]);
-                     if (nargs >= 2) SETARG_vB(inst, args[1]);
-                     if (nargs >= 3) SETARG_vC(inst, args[2]);
-                     if (has_k) SETARG_k(inst, 1);
-                     break;
+                    if (nargs >= 2) enc.b = args[1];
+                    if (nargs >= 3) enc.c = args[2];
+                    if (has_k) enc.k = 1;
+                    break;
                 case ALCC_iABx:
-                    if (nargs >= 1) SETARG_A(inst, args[0]);
-                    if (nargs >= 2) SETARG_Bx(inst, args[1]);
-                    break;
                 case ALCC_iAsBx:
-                    if (nargs >= 1) SETARG_A(inst, args[0]);
-                    if (nargs >= 2) SETARG_sBx(inst, args[1]);
-                    break;
                 case ALCC_iAx:
-                    if (nargs >= 1) SETARG_Ax(inst, args[0]);
-                    break;
                 case ALCC_isJ:
-                    if (nargs >= 1) SETARG_sJ(inst, args[0]);
-                    if (has_k) SETARG_k(inst, 1);
+                    if (nargs >= 2) enc.bx = args[1];
+                    if (has_k && info->mode == ALCC_isJ) enc.k = 1;
+                    if (info->mode == ALCC_iAx && nargs >= 1) enc.bx = args[0];
+                    if (info->mode == ALCC_isJ && nargs >= 1) enc.bx = args[0];
                     break;
             }
-            p->code[i] = inst;
+
+            p->code[i] = (Instruction)current_backend->encode_instruction(&enc);
         }
     }
 
@@ -328,11 +307,6 @@ int main(int argc, char** argv) {
     ParseCtx ctx;
     ctx.f = f;
     ctx.line_no = 0;
-
-    // Plugin? Not supported in CLI args yet for assembler in plan, but let's add minimal support if needed?
-    // Plan said "Update src/assembler.c to call these hooks."
-    // But verify script doesn't test assembler with plugin.
-    // I will pass NULL for now unless I add arg parsing.
 
     Proto* p = parse_proto(L, &ctx, NULL);
     fclose(f);

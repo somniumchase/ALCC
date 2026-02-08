@@ -23,6 +23,9 @@ typedef struct {
 
     // Called when assembler reads a line
     void (*on_asm_line)(ParseCtx* ctx, char* line);
+
+    // Called when decompiling an instruction. Return 1 if handled.
+    int (*on_decompile_inst)(Proto* p, int pc, char* out_buffer, size_t buffer_size);
 } AlccPlugin;
 
 typedef AlccPlugin* (*alcc_plugin_init_fn)(void);

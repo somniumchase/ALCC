@@ -12,9 +12,12 @@
 #include "lopcodes.h"
 #include "lstring.h"
 #include "alcc_utils.h"
-#include "alcc_opcodes.h"
+#include "alcc_backend.h"
+#include "../plugin/alcc_plugin.h"
 
 #define MAX_LABELS 1000
+
+static AlccPlugin* current_plugin = NULL; // Should be loaded if shared
 
 typedef struct {
     int targets[MAX_LABELS];
@@ -23,30 +26,30 @@ typedef struct {
 
 static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
     ja->count = 0;
+    AlccInstruction dec;
+
     for (int i=0; i<p->sizecode; i++) {
-        Instruction inst = p->code[i];
-        OpCode op = GET_OPCODE(inst);
+        current_backend->decode_instruction((uint32_t)p->code[i], &dec);
 
-        // Use abstract checks if possible, or just specific opcodes for logic
-        if (op == OP_JMP || op == OP_FORLOOP || op == OP_FORPREP || op == OP_TFORLOOP) {
-            int target = -1;
-            if (op == OP_JMP) {
-                int sj = GETARG_sJ(inst);
-                target = i + 1 + sj;
-            } else if (op == OP_FORLOOP || op == OP_FORPREP || op == OP_TFORLOOP) {
-                int bx = GETARG_Bx(inst);
-                target = i + 1 - bx;
-                if (op == OP_FORPREP) target = i + 1 + bx + 1;
+        int op = dec.op;
+        int target = -1;
+
+        // This logic is still somewhat specific to Lua semantics, but uses decoded values
+        if (op == OP_JMP) {
+            target = i + 1 + dec.bx; // sj is in bx field for ALCC_isJ
+        } else if (op == OP_FORLOOP || op == OP_TFORLOOP) {
+            target = i + 1 - dec.bx;
+        } else if (op == OP_FORPREP) {
+            target = i + 1 + dec.bx + 1;
+        }
+
+        if (target >= 0 && target < p->sizecode) {
+            int found = 0;
+            for (int j=0; j<ja->count; j++) {
+                if (ja->targets[j] == target) { found=1; break; }
             }
-
-            if (target >= 0 && target < p->sizecode) {
-                int found = 0;
-                for (int j=0; j<ja->count; j++) {
-                    if (ja->targets[j] == target) { found=1; break; }
-                }
-                if (!found && ja->count < MAX_LABELS) {
-                    ja->targets[ja->count++] = target;
-                }
+            if (!found && ja->count < MAX_LABELS) {
+                ja->targets[ja->count++] = target;
             }
         }
     }
@@ -99,35 +102,42 @@ static void decompile(Proto* p, int level) {
     }
     printf(")\n");
 
+    char buffer[4096];
+    AlccInstruction dec;
+
     for (int i=0; i<p->sizecode; i++) {
-        Instruction inst = p->code[i];
-        OpCode op = GET_OPCODE(inst);
-        int a = GETARG_A(inst);
-        int b = GETARG_B(inst);
-        int c = GETARG_C(inst);
-        int bx = GETARG_Bx(inst);
-        int sbx = GETARG_sBx(inst);
-        int ax = GETARG_Ax(inst);
-        int sj = GETARG_sJ(inst);
-        int k = GETARG_k(inst);
-        (void)ax; (void)k;
+        // Plugin Hook
+        if (current_plugin && current_plugin->on_decompile_inst) {
+             if (current_plugin->on_decompile_inst(p, i, buffer, sizeof(buffer))) {
+                 printf("%*s%s\n", level*2, "", buffer);
+                 continue;
+             }
+        }
 
         int lbl = get_label_id(&ja, i);
         if (lbl >= 0) {
             printf("%*s::L%d::\n", level*2, "", lbl);
         }
 
+        current_backend->decode_instruction((uint32_t)p->code[i], &dec);
+
         printf("%*s  ", level*2, "");
+
+        int op = dec.op;
+        int a = dec.a;
+        int b = dec.b;
+        int c = dec.c;
+        int bx = dec.bx; // overloaded for sbx/sJ/ax
 
         switch(op) {
             case OP_MOVE:
                 printf("local R[%d] = R[%d]", a, b);
                 break;
             case OP_LOADI:
-                printf("local R[%d] = %d", a, sbx);
+                printf("local R[%d] = %d", a, bx); // sbx
                 break;
             case OP_LOADF:
-                printf("local R[%d] = %d", a, sbx);
+                printf("local R[%d] = %d", a, bx); // sbx
                 break;
             case OP_LOADK:
                 printf("local R[%d] = ", a);
@@ -182,7 +192,7 @@ static void decompile(Proto* p, int level) {
             case OP_RETURN0: printf("return"); break;
             case OP_RETURN1: printf("return R[%d]", a); break;
             case OP_JMP: {
-                int dest = i + 1 + sj;
+                int dest = i + 1 + bx; // sJ
                 int dest_lbl = get_label_id(&ja, dest);
                 if (dest_lbl >= 0) printf("goto L%d", dest_lbl);
                 else printf("goto %d", dest);
@@ -201,7 +211,7 @@ static void decompile(Proto* p, int level) {
                  break;
             }
             default: {
-                const char* name = alcc_get_op_name(op);
+                const char* name = current_backend->get_op_name(op);
                 if (name) printf("; %s %d %d %d", name, a, b, c);
                 else printf("; OP_%d %d %d %d", op, a, b, c);
             }
