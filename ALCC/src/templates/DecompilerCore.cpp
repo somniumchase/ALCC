@@ -173,30 +173,176 @@ static int get_label_type(JumpAnalysis* ja, int pc) {
     return TARGET_NORMAL;
 }
 
-static Expression* make_var(Proto* p, int reg, int pc) {
-    const char* name = luaF_getlocalname(p, reg + 1, pc);
-    if (name) return new Variable(name);
-    if (reg < p->numparams) return new Variable("P" + std::to_string(reg));
-    return new Variable("v" + std::to_string(reg));
-}
+struct DecompilerContext {
+    Proto* p;
+    BlockStack bs;
+    JumpAnalysis ja;
+    Block* current_block;
+    Block* root_block;
+    std::vector<Expression*> pending_regs;
 
-static Expression* make_upval(Proto* p, int idx) {
-    if (idx < p->sizeupvalues && p->upvalues[idx].name) {
-        const char* name = getstr(p->upvalues[idx].name);
-        if (is_identifier(name)) return new Variable(name, true);
-        return new Literal(std::string(name)); // Fallback if weird name
+    DecompilerContext(Proto* proto) : p(proto), current_block(nullptr), root_block(nullptr) {
+        bs.top = 0;
+        pending_regs.resize(p->maxstacksize, nullptr);
     }
-    return new Variable("upval_" + std::to_string(idx), true);
+
+    bool is_safe_to_inline(Expression* expr) {
+        if (!expr) return false;
+        if (dynamic_cast<Literal*>(expr)) return true;
+        if (dynamic_cast<Variable*>(expr)) return true;
+        if (auto* ue = dynamic_cast<UnaryExpr*>(expr)) return is_safe_to_inline(ue->expr);
+        if (auto* be = dynamic_cast<BinaryExpr*>(expr)) return is_safe_to_inline(be->left) && is_safe_to_inline(be->right);
+        return false;
+    }
+
+    Expression* clone_expr(Expression* expr) {
+        if (!expr) return nullptr;
+        if (auto* l = dynamic_cast<Literal*>(expr)) {
+             if (l->type == Literal::STRING) return new Literal(l->string_val);
+             if (l->type == Literal::NUMBER) return new Literal(l->number_val);
+             if (l->type == Literal::BOOLEAN) return new Literal(l->bool_val);
+             return new Literal();
+        }
+        if (auto* v = dynamic_cast<Variable*>(expr)) {
+             return new Variable(v->name, v->is_upvalue);
+        }
+        if (auto* ue = dynamic_cast<UnaryExpr*>(expr)) {
+             return new UnaryExpr(ue->op, clone_expr(ue->expr));
+        }
+        if (auto* be = dynamic_cast<BinaryExpr*>(expr)) {
+             return new BinaryExpr(clone_expr(be->left), be->op, clone_expr(be->right));
+        }
+        return nullptr;
+    }
+
+    Expression* make_var(int reg, int pc) {
+        const char* name = luaF_getlocalname(p, reg + 1, pc);
+        if (name) return new Variable(name);
+        if (reg < p->numparams) return new Variable("P" + std::to_string(reg));
+        return new Variable("v" + std::to_string(reg));
+    }
+
+    Expression* make_upval(int idx) {
+        if (idx < p->sizeupvalues && p->upvalues[idx].name) {
+            const char* name = getstr(p->upvalues[idx].name);
+            if (is_identifier(name)) return new Variable(name, true);
+            return new Literal(std::string(name));
+        }
+        return new Variable("upval_" + std::to_string(idx), true);
+    }
+
+    Expression* make_const(int k) {
+        TValue* val = &p->k[k];
+        if (ttisstring(val)) return new Literal(std::string(getstr(tsvalue(val))));
+        if (ttisinteger(val)) return new Literal((double)ivalue(val));
+        if (ttisnumber(val)) return new Literal(fltvalue(val));
+        if (ttisnil(val)) return new Literal();
+        if (ttisboolean(val)) return new Literal(ttistrue(val));
+        return new Literal("?");
+    }
+
+    Expression* get_expr(int reg, int pc) {
+        if ((size_t)reg < pending_regs.size() && pending_regs[reg] != nullptr) {
+            if (is_safe_to_inline(pending_regs[reg])) {
+                // Clone instead of consume
+                return clone_expr(pending_regs[reg]);
+            }
+            else {
+                // Should not happen if I only put safe things in pending.
+                // But if it is there, flush it?
+                flush_pending(reg, pc);
+                return make_var(reg, pc);
+            }
+        }
+        return make_var(reg, pc);
+    }
+
+    void set_expr(int reg, Expression* expr) {
+        if ((size_t)reg < pending_regs.size()) {
+            if (pending_regs[reg]) {
+                // Overwriting unconsumed expression. Flush it first?
+                // Or delete it? If it was pure side-effect-free, we can delete.
+                // But it might be an important calculation.
+                // E.g. local a = 1+2; a = 3;
+                // 1+2 is lost.
+                // In Lua, side-effect free exprs can be discarded.
+                // But to be safe, maybe flush?
+                // Actually, if I overwrite, it means the value is dead.
+                delete pending_regs[reg];
+            }
+            pending_regs[reg] = expr;
+        }
+    }
+
+    void flush_pending(int reg, int pc) {
+        if ((size_t)reg < pending_regs.size() && pending_regs[reg]) {
+            Assignment* assign = new Assignment(false);
+            assign->targets.push_back(make_var(reg, pc));
+            assign->values.push_back(pending_regs[reg]);
+            current_block->add(assign);
+            pending_regs[reg] = nullptr;
+        }
+    }
+
+    void flush_all_pending(int pc) {
+        for (size_t i = 0; i < pending_regs.size(); i++) {
+            flush_pending(i, pc);
+        }
+    }
+};
+
+static Proto* printed_proto_list[1000];
+static int printed_proto_count = 0;
+static int is_proto_printed(Proto* p) {
+    for(int i=0;i<printed_proto_count;i++) if(printed_proto_list[i]==p) return 1;
+    return 0;
+}
+static void set_proto_printed(Proto* p) {
+    if(printed_proto_count<1000) printed_proto_list[printed_proto_count++]=p;
 }
 
-static Expression* make_const(Proto* p, int k) {
-    TValue* val = &p->k[k];
-    if (ttisstring(val)) return new Literal(std::string(getstr(tsvalue(val))));
-    if (ttisinteger(val)) return new Literal((double)ivalue(val));
-    if (ttisnumber(val)) return new Literal(fltvalue(val));
-    if (ttisnil(val)) return new Literal();
-    if (ttisboolean(val)) return new Literal(ttistrue(val));
-    return new Literal("?");
+// Helpers
+static void process_arithmetic(DecompilerContext& ctx, int pc, int op, int a, int b, int c, bool is_k) {
+    Expression* left = ctx.get_expr(b, pc);
+    Expression* right = is_k ? ctx.make_const(c) : ctx.get_expr(c, pc);
+    std::string op_str = "?";
+    switch(op) {
+        case OP_ADD: op_str = "+"; break;
+        case OP_SUB: op_str = "-"; break;
+        case OP_MUL: op_str = "*"; break;
+        case OP_DIV: op_str = "/"; break;
+        case OP_MOD: op_str = "%"; break;
+        case OP_POW: op_str = "^"; break;
+        case OP_IDIV: op_str = "//"; break;
+        case OP_BAND: op_str = "&"; break;
+        case OP_BOR: op_str = "|"; break;
+        case OP_BXOR: op_str = "~"; break;
+        case OP_SHL: op_str = "<<"; break;
+        case OP_SHR: op_str = ">>"; break;
+    }
+    Expression* bin = new BinaryExpr(left, op_str, right);
+    if (ctx.is_safe_to_inline(bin)) {
+        ctx.set_expr(a, bin);
+    } else {
+        // If not safe (shouldn't happen for binary of safe ops), assign.
+        // But BinaryExpr ownership check: if left/right are pending, they are now owned by bin.
+        // If bin is put in pending, good.
+        // If bin is assigned, good.
+        ctx.set_expr(a, bin);
+    }
+}
+
+static void process_unary(DecompilerContext& ctx, int pc, int op, int a, int b) {
+    Expression* val = ctx.get_expr(b, pc);
+    std::string op_str = "?";
+    switch(op) {
+        case OP_UNM: op_str = "-"; break;
+        case OP_BNOT: op_str = "~"; break;
+        case OP_NOT: op_str = "not"; break;
+        case OP_LEN: op_str = "#"; break;
+    }
+    Expression* un = new UnaryExpr(op_str, val);
+    ctx.set_expr(a, un);
 }
 
 // Helper to check conditional jump
@@ -220,31 +366,15 @@ static int is_conditional_jump(Proto* p, int pc, int* target) {
     return 0;
 }
 
-static Proto* printed_proto_list[1000];
-static int printed_proto_count = 0;
-static int is_proto_printed(Proto* p) {
-    for(int i=0;i<printed_proto_count;i++) if(printed_proto_list[i]==p) return 1;
-    return 0;
-}
-static void set_proto_printed(Proto* p) {
-    if(printed_proto_count<1000) printed_proto_list[printed_proto_count++]=p;
-}
-
 ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
-    JumpAnalysis ja;
-    analyze_jumps(p, &ja);
-
-    BlockStack bs;
-    bs.top = 0;
+    DecompilerContext ctx(p);
+    analyze_jumps(p, &ctx.ja);
 
     // Create Root FunctionDecl
-    // Note: If this is top-level chunk, it might not have name.
-    // If it's a sub-function called from decompile(), we handle it.
-    // build_ast builds the BODY of the function essentially,
-    // or returns a FunctionDecl.
-    // Let's return FunctionDecl.
-
     Block* root_block = new Block();
+    ctx.root_block = root_block;
+    ctx.current_block = root_block;
+
     FunctionDecl* func_node = new FunctionDecl("", root_block); // Name filled by caller if needed
 
     // Params
@@ -255,104 +385,60 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
     }
     if(isvararg(p)) func_node->is_vararg = true;
 
-    Block* current_block = root_block;
-
     AlccInstruction dec;
     bool pending_elseif = false;
 
     for (int i=0; i<p->sizecode; i++) {
-        // Plugin hook for instruction AST?
-        // Current plugin hook is text based. We skip it for AST mode or we'd need new hook.
-        // We ignore on_decompile_inst for now as it returns string.
+        int lbl = get_label_id(&ctx.ja, i);
+        int lbl_type = get_label_type(&ctx.ja, i);
 
-        int lbl = get_label_id(&ja, i);
-        int lbl_type = get_label_type(&ja, i);
+        if (lbl >= 0 || lbl_type != TARGET_NORMAL) {
+            ctx.flush_all_pending(i);
+        }
 
         if (lbl_type == TARGET_REPEAT) {
              RepeatStmt* rep = new RepeatStmt(new Block(), nullptr);
-             current_block->add(rep);
-             bs_push(&bs, -1, BLOCK_REPEAT, rep, rep->body, i);
-             current_block = rep->body;
+             ctx.current_block->add(rep);
+             bs_push(&ctx.bs, -1, BLOCK_REPEAT, rep, rep->body, i);
+             ctx.current_block = rep->body;
         }
 
         if (lbl >= 0) {
-            current_block->add(new LabelStmt("L" + std::to_string(lbl)));
+            ctx.current_block->add(new LabelStmt("L" + std::to_string(lbl)));
         }
 
         current_backend->decode_instruction((uint32_t)p->code[i], &dec);
 
         int status;
-        while ((status = bs_check_end(&bs, i, p))) {
+        while ((status = bs_check_end(&ctx.bs, i, p))) {
+            ctx.flush_all_pending(i); // Block end boundary
             if (status == 2) {
                 // ELSE transition
                 int target = -1;
-                IfStmt* if_stmt = (IfStmt*)bs.blocks[bs.top-1].ast_stmt;
+                IfStmt* if_stmt = (IfStmt*)ctx.bs.blocks[ctx.bs.top-1].ast_stmt;
 
                 if (is_conditional_jump(p, i, &target)) {
-                     // ElseIf
                      pending_elseif = true;
-                     // We don't create block yet, wait for conditional
-                     // But we must update current block pointer?
-                     // No, we are about to process conditional which will push new block.
-                     // But we popped the 'then' block.
-                     // We need to know we are in 'pending elseif' state?
-                     // Actually, is_conditional_jump logic below handles creating IfStmt or Clause.
-                     // If we are pending_elseif, we add clause to existing IfStmt.
                 } else {
                      // Else
                      Block* else_blk = new Block();
                      if_stmt->clauses.push_back({nullptr, else_blk});
-                     current_block = else_blk;
-                     // We need to push back to stack because 'else' block also needs to end
-                     // Update existing stack entry?
-                     bs.blocks[bs.top-1].ast_block = else_blk;
-                     // target_pc was updated by bs_check_end
-                     bs.top++; // bs_check_end popped it, push back modified?
-                     // bs_check_end popped. We need to push new state.
-                     bs_push(&bs, bs.blocks[bs.top].target_pc, BLOCK_IF, if_stmt, else_blk);
-                     // Wait, bs_check_end decremented top. bs.blocks[bs.top] is the one just popped?
-                     // No, it's garbage. bs_check_end modifies target_pc of [top-1] BEFORE popping?
-                     // Let's re-read bs_check_end.
-                     // It modifies [top-1] target then returns 2. It does NOT pop if returning 2.
-                     // So we are still on stack. We just need to switch current_block.
-                     // Ah, my bs_check_end implementation:
-                     // "if ... return 2; ... bs->top--; return 1;"
-                     // So if 2, it does NOT pop.
-                     // So we just update bs->blocks[bs.top-1].ast_block = else_blk;
-                     bs.blocks[bs.top-1].ast_block = else_blk;
-                     // Only one else transition per PC. Stop checking parents.
+                     ctx.current_block = else_blk;
+                     ctx.bs.blocks[ctx.bs.top-1].ast_block = else_blk;
                      break;
                 }
             } else {
-                // END
-                // Pop stack.
-                // Restore current_block to parent.
-                // Parent block is ...?
-                // We need to find the parent block.
-                // We can look at bs->blocks[bs.top-1] (new top) -> ast_block.
-                // If stack empty, root_block.
-                if (bs.top > 0) current_block = bs.blocks[bs.top-1].ast_block;
-                else current_block = root_block;
+                if (ctx.bs.top > 0) ctx.current_block = ctx.bs.blocks[ctx.bs.top-1].ast_block;
+                else ctx.current_block = root_block;
             }
         }
 
         if (dec.op == OP_FORLOOP || dec.op == OP_TFORLOOP) {
-             // Block ended by bs_check_end usually?
-             // FORLOOP is the end instruction.
-             // Analyze jumps sets target to START of loop?
-             // analyze_jumps: FORLOOP target = i + 1 - bx.
-             // bs stack target for loop is ...?
-             // Actually FORLOOP instruction IS the end marker.
-             // We should pop here?
-             // bs_check_end checks `target <= pc`.
-             // If loop target is start, that doesn't help end check.
-             // For loops, the scope covers the body.
-             // When we hit FORLOOP, we are at end of body.
-             // We should pop.
-             if (bs.top > 0 && bs.blocks[bs.top-1].type == BLOCK_LOOP) {
-                 bs.top--;
-                 if (bs.top > 0) current_block = bs.blocks[bs.top-1].ast_block;
-                 else current_block = root_block;
+             ctx.flush_all_pending(i);
+             if (ctx.bs.top > 0 && ctx.bs.blocks[ctx.bs.top-1].type == BLOCK_LOOP) {
+                 ctx.bs.top--;
+                 if (ctx.bs.top > 0) ctx.current_block = ctx.bs.blocks[ctx.bs.top-1].ast_block;
+                 else ctx.current_block = root_block;
              }
         }
 
@@ -365,38 +451,203 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
 
         switch(op) {
             case OP_MOVE: {
-                Assignment* assign = new Assignment(false);
-                assign->targets.push_back(make_var(p, a, i));
-                assign->values.push_back(make_var(p, b, i));
-                current_block->add(assign);
+                ctx.set_expr(a, ctx.get_expr(b, i));
                 break;
             }
             case OP_LOADI:
             case OP_LOADF: {
-                Assignment* assign = new Assignment(false);
-                assign->targets.push_back(make_var(p, a, i));
-                assign->values.push_back(new Literal((double)bx));
-                current_block->add(assign);
+                ctx.set_expr(a, new Literal((double)bx));
                 break;
             }
             case OP_LOADK: {
+                ctx.set_expr(a, ctx.make_const(bx));
+                break;
+            }
+            case OP_GETUPVAL: {
+                ctx.set_expr(a, ctx.make_upval(b));
+                break;
+            }
+            case OP_SETUPVAL: {
                 Assignment* assign = new Assignment(false);
-                assign->targets.push_back(make_var(p, a, i));
-                assign->values.push_back(make_const(p, bx));
-                current_block->add(assign);
+                assign->targets.push_back(ctx.make_upval(b));
+                assign->values.push_back(ctx.get_expr(a, i));
+                ctx.current_block->add(assign);
+                break;
+            }
+            case OP_GETTABUP: {
+                Expression* key = ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : ctx.make_const(c);
+                ctx.set_expr(a, new BinaryExpr(ctx.make_upval(b), "[", key));
+                break;
+            }
+            case OP_GETTABLE: {
+                ctx.set_expr(a, new BinaryExpr(ctx.get_expr(b, i), "[", ctx.get_expr(c, i)));
+                break;
+            }
+            case OP_GETI: {
+                ctx.set_expr(a, new BinaryExpr(ctx.get_expr(b, i), "[", new Literal((double)c)));
+                break;
+            }
+            case OP_GETFIELD: {
+                Expression* key = ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : ctx.make_const(c);
+                ctx.set_expr(a, new BinaryExpr(ctx.get_expr(b, i), "[", key));
+                break;
+            }
+            case OP_SETTABUP: {
+                Expression* key = ttisstring(&p->k[b]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[b])))) : ctx.make_const(b);
+                Assignment* assign = new Assignment(false);
+                assign->targets.push_back(new BinaryExpr(ctx.make_upval(a), "[", key));
+                assign->values.push_back(ctx.get_expr(c, i));
+                ctx.current_block->add(assign);
+                break;
+            }
+            case OP_SETTABLE: {
+                Assignment* assign = new Assignment(false);
+                assign->targets.push_back(new BinaryExpr(ctx.get_expr(a, i), "[", ctx.get_expr(b, i)));
+                assign->values.push_back(k ? ctx.make_const(c) : ctx.get_expr(c, i));
+                ctx.current_block->add(assign);
+                break;
+            }
+            case OP_SETI: {
+                Assignment* assign = new Assignment(false);
+                assign->targets.push_back(new BinaryExpr(ctx.get_expr(a, i), "[", new Literal((double)b)));
+                assign->values.push_back(k ? ctx.make_const(c) : ctx.get_expr(c, i));
+                ctx.current_block->add(assign);
+                break;
+            }
+            case OP_SETFIELD: {
+                Expression* key = ttisstring(&p->k[b]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[b])))) : ctx.make_const(b);
+                Assignment* assign = new Assignment(false);
+                assign->targets.push_back(new BinaryExpr(ctx.get_expr(a, i), "[", key));
+                assign->values.push_back(k ? ctx.make_const(c) : ctx.get_expr(c, i));
+                ctx.current_block->add(assign);
+                break;
+            }
+            case OP_SELF: {
+                 ctx.set_expr(a+1, ctx.get_expr(b, i)); // self arg
+                 Expression* key = ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : ctx.make_const(c);
+                 ctx.set_expr(a, new BinaryExpr(ctx.get_expr(b, i), "[", key)); // method
+                 break;
+            }
+            case OP_ADD: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_SUB: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_MUL: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_DIV: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_MOD: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_POW: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_IDIV: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_BAND: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_BOR: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_BXOR: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_SHL: process_arithmetic(ctx, i, op, a, b, c, false); break;
+            case OP_SHR: process_arithmetic(ctx, i, op, a, b, c, false); break;
+
+            case OP_UNM: case OP_BNOT: case OP_NOT: case OP_LEN:
+                process_unary(ctx, i, op, a, b);
+                break;
+
+            case OP_CONCAT: {
+                ctx.flush_pending(a, i); // safety?
+                // actually if a is pending, we can use it?
+                // OP_CONCAT A B means R[A] := R[A] .. ... .. R[A+B-1]
+                Expression* expr = ctx.get_expr(a, i);
+                for(int j=1; j<b; j++) {
+                    expr = new BinaryExpr(expr, "..", ctx.get_expr(a+j, i));
+                }
+                ctx.set_expr(a, expr);
+                break;
+            }
+            case OP_CALL: {
+                // Flush args?
+                // args are A+1 ...
+                // But if they are pending safe exprs, get_expr will inline them.
+                FunctionCall* call = new FunctionCall(ctx.get_expr(a, i));
+                for(int j=1; j<b; j++) call->args.push_back(ctx.get_expr(a+j, i));
+
+                if (c == 0) { // multret
+                    Assignment* a_stmt = new Assignment(false);
+                    a_stmt->targets.push_back(new Variable("multret"));
+                    a_stmt->values.push_back(call);
+                    ctx.current_block->add(a_stmt);
+                } else if (c == 1) { // no results
+                     ctx.current_block->add(new ExprStmt(call));
+                } else {
+                     if (c > 1) {
+                         // Results R[A]...
+                         // Unsafe to inline function call multiple times.
+                         // So we must assign.
+                         // BUT, if results > 1, it's a multi-assignment.
+                         // local v1, v2 = f()
+                         // We can't put this in pending easily because pending tracks 1 reg -> 1 expr.
+                         // So we must flush.
+                         Assignment* a_stmt = new Assignment(false);
+                         for(int j=0; j<c-1; j++) {
+                             // ctx.flush_pending(a+j, i); // ensure target regs are clear?
+                             // No, assignment overwrites.
+                             a_stmt->targets.push_back(ctx.make_var(a+j, i));
+                         }
+                         a_stmt->values.push_back(call);
+                         ctx.current_block->add(a_stmt);
+
+                         // We should clear pending for these targets?
+                         for(int j=0; j<c-1; j++) ctx.pending_regs[a+j] = nullptr;
+                         // But we just assigned them. They are now holding the result of call.
+                         // Can we say pending[a] = Variable(a)?
+                         // No need, get_expr does that by default.
+                     }
+                }
+                break;
+            }
+            case OP_NEWTABLE: {
+                TableConstructor* tc = new TableConstructor();
+                Assignment* assign = new Assignment(false);
+                assign->targets.push_back(ctx.make_var(a, i));
+                assign->values.push_back(tc);
+                ctx.current_block->add(assign);
+                // Can't easily inline table constructor logic yet with loop below.
+
+                int table_reg = a;
+                int next_pc = i + 1;
+                while (next_pc < p->sizecode) {
+                    AlccInstruction next_inst;
+                    current_backend->decode_instruction((uint32_t)p->code[next_pc], &next_inst);
+                    if (next_inst.op == OP_EXTRAARG) { next_pc++; continue; }
+                    if (next_inst.op == OP_SETFIELD && next_inst.a == table_reg) {
+                         Expression* key = nullptr;
+                         if (ttisstring(&p->k[next_inst.b])) key = new Literal(std::string(getstr(tsvalue(&p->k[next_inst.b]))));
+                         else key = ctx.make_const(next_inst.b);
+
+                         Expression* val = next_inst.k ? ctx.make_const(next_inst.c) : ctx.get_expr(next_inst.c, next_pc);
+                         tc->fields.push_back({key, val});
+                         next_pc++;
+                    } else if (next_inst.op == OP_SETLIST && next_inst.a == table_reg) {
+                         int num = next_inst.b;
+                         if (num == 0) num = 0;
+                         for (int j=1; j<=num; j++) {
+                             tc->fields.push_back({nullptr, ctx.get_expr(next_inst.a + j, next_pc)});
+                         }
+                         next_pc++;
+                    } else if (next_inst.op == OP_SETI && next_inst.a == table_reg) {
+                         Expression* key = new Literal((double)next_inst.b);
+                         Expression* val = next_inst.k ? ctx.make_const(next_inst.c) : ctx.get_expr(next_inst.c, next_pc);
+                         tc->fields.push_back({key, val});
+                         next_pc++;
+                    } else {
+                         break;
+                    }
+                }
+                i = next_pc - 1;
                 break;
             }
             case OP_CLOSURE: {
+                 // Simplified closure handling
                 Proto* sub = p->p[bx];
                 ASTNode* sub_ast = build_ast(sub, plugin);
                 FunctionDecl* sub_func = dynamic_cast<FunctionDecl*>(sub_ast);
-                // Check name
                 std::string func_name;
                 bool is_local = false;
-                bool is_method = false;
 
-                int next_idx = i + 1;
-                // Peek
+                // TODO: Peek logic similar to before to find name
+                 int next_idx = i + 1;
                 if (next_idx < p->sizecode) {
                     AlccInstruction next;
                     current_backend->decode_instruction((uint32_t)p->code[next_idx], &next);
@@ -427,214 +678,40 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                 if (!func_name.empty()) {
                     sub_func->name = func_name;
                     sub_func->is_local = is_local;
-                    current_block->add(sub_func);
+                    ctx.current_block->add(sub_func);
                 } else {
-                    // Anonymous assign
                     Assignment* assign = new Assignment(false);
-                    assign->targets.push_back(make_var(p, a, i));
+                    assign->targets.push_back(ctx.make_var(a, i));
                     ClosureExpr* closure = new ClosureExpr(sub_func->body);
                     closure->params = sub_func->params;
                     closure->is_vararg = sub_func->is_vararg;
-                    // Detach body from sub_func so it isn't deleted twice, or just copy?
-                    // sub_func owns body.
                     sub_func->body = nullptr;
-                    delete sub_func; // cleanup container
-
+                    delete sub_func;
                     assign->values.push_back(closure);
-                    current_block->add(assign);
+                    ctx.current_block->add(assign);
                 }
                 set_proto_printed(sub);
                 break;
             }
-            case OP_VARARG: {
-                Assignment* assign = new Assignment(false);
-                assign->targets.push_back(make_var(p, a, i));
-                // simplified vararg handling
-                assign->values.push_back(new Variable("..."));
-                current_block->add(assign);
-                break;
-            }
-            case OP_ADD: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "+", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_SUB: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "-", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_MUL: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "*", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_DIV: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "/", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_MOD: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "%", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_POW: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "^", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_IDIV: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "//", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_BAND: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "&", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_BOR: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "|", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_BXOR: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "~", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_SHL: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "<<", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_SHR: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), ">>", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_UNM: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new UnaryExpr("-", make_var(p, b, i))); current_block->add(a_stmt); break; }
-            case OP_BNOT: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new UnaryExpr("~", make_var(p, b, i))); current_block->add(a_stmt); break; }
-            case OP_NOT: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new UnaryExpr("not", make_var(p, b, i))); current_block->add(a_stmt); break; }
-            case OP_LEN: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new UnaryExpr("#", make_var(p, b, i))); current_block->add(a_stmt); break; }
-            case OP_CONCAT: {
-                Assignment* a_stmt = new Assignment(false);
-                a_stmt->targets.push_back(make_var(p, a, i));
-                Expression* expr = make_var(p, a, i); // start with first
-                for(int j=1; j<b; j++) {
-                    expr = new BinaryExpr(expr, "..", make_var(p, a+j, i));
-                }
-                a_stmt->values.push_back(expr);
-                current_block->add(a_stmt);
-                break;
-            }
-            case OP_CALL: {
-                FunctionCall* call = new FunctionCall(make_var(p, a, i));
-                for(int j=1; j<b; j++) call->args.push_back(make_var(p, a+j, i));
-                if (c == 0) { // multret
-                    Assignment* a_stmt = new Assignment(false);
-                    a_stmt->targets.push_back(new Variable("multret"));
-                    a_stmt->values.push_back(call);
-                    current_block->add(a_stmt);
-                } else if (c == 1) { // no results
-                     current_block->add(new ExprStmt(call));
-                } else {
-                     Assignment* a_stmt = new Assignment(false);
-                     for(int j=0; j<c-1; j++) a_stmt->targets.push_back(make_var(p, a+j, i)); // Assuming results go to registers starting at A? OP_CALL A B C. R[A],... = R[A](R[A+1],...)
-                     // Wait, OP_CALL args are R[A+1]...R[A+B-1]. Function is R[A].
-                     // Results are R[A]...R[A+C-2].
-                     // My generic 'make_var' uses reg index.
-                     // The call args in logic above: `make_var(p, a+j, i)` for j=1..b. Correct.
-                     // The targets: R[A]..R[A+C-2].
-                     if (c > 1) {
-                         // We reconstruct targets manually
-                         a_stmt->values.push_back(call);
-                         current_block->add(a_stmt);
-                     }
-                }
-                break;
-            }
-            case OP_NEWTABLE: {
-                TableConstructor* tc = new TableConstructor();
-                Assignment* assign = new Assignment(false);
-                assign->targets.push_back(make_var(p, a, i));
-                assign->values.push_back(tc);
-                current_block->add(assign);
-
-                int table_reg = a;
-                int next_pc = i + 1;
-                int items = 0;
-                while (next_pc < p->sizecode) {
-                    AlccInstruction next_inst;
-                    current_backend->decode_instruction((uint32_t)p->code[next_pc], &next_inst);
-                    if (next_inst.op == OP_EXTRAARG) { next_pc++; continue; }
-                    if (next_inst.op == OP_SETFIELD && next_inst.a == table_reg) {
-                         Expression* key = nullptr;
-                         if (ttisstring(&p->k[next_inst.b])) key = new Literal(std::string(getstr(tsvalue(&p->k[next_inst.b]))));
-                         else key = make_const(p, next_inst.b);
-
-                         Expression* val = next_inst.k ? make_const(p, next_inst.c) : make_var(p, next_inst.c, next_pc);
-                         tc->fields.push_back({key, val});
-                         items++; next_pc++;
-                    } else if (next_inst.op == OP_SETLIST && next_inst.a == table_reg) {
-                         int num = next_inst.b;
-                         if (num == 0) num = 0;
-                         for (int j=1; j<=num; j++) {
-                             tc->fields.push_back({nullptr, make_var(p, next_inst.a + j, next_pc)});
-                         }
-                         items++; next_pc++;
-                    } else if (next_inst.op == OP_SETI && next_inst.a == table_reg) {
-                         Expression* key = new Literal((double)next_inst.b);
-                         Expression* val = next_inst.k ? make_const(p, next_inst.c) : make_var(p, next_inst.c, next_pc);
-                         tc->fields.push_back({key, val});
-                         items++; next_pc++;
-                    } else {
-                         break;
-                    }
-                }
-                i = next_pc - 1;
-                break;
-            }
-            case OP_GETTABUP: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i));
-                // Upval[B][K[C]]
-                // We don't have TableAccess expression easily mapable if we treat Upval[B] as variable.
-                // make_upval returns Variable.
-                // We need TableAccess expr? "IndexExpr".
-                // I didn't create IndexExpr. I only have BinaryExpr or similar?
-                // Wait, I forgot IndexExpr/TableAccess in AST.h?
-                // I have `TableConstructor` and `BinaryExpr`.
-                // Lua `t[k]` is usually handled as `BinaryExpr`? No.
-                // I'll use BinaryExpr with op "[]" or just create a temporary hack or extend AST?
-                // I should extend AST if I want perfection.
-                // But for now I'll use `BinaryExpr(base, "[]", key)` and handle in printer?
-                // Or simply `FunctionCall`? No.
-                // Let's use `BinaryExpr` with op `.` or `[]`.
-                // Printer checks op.
-                Expression* base = make_upval(p, b);
-                Expression* key = ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : make_const(p, c);
-                // Printer logic for `.` vs `[]` was specific.
-                // Let's cheat and use Unary? No.
-                // I'll just print it as `base[key]`.
-                // Wait, `getstr` logic in `DecompilerCore` checked identifier.
-                // If I use `.` in AST, I need to know it's a dot access.
-                // `BinaryExpr` op="." means `left.right`. `right` should be identifier string?
-                // If I pass Literal String, printer prints `"str"`. `base."str"` is invalid.
-                // I need `MemberAccess` node.
-                // Time constraint: use BinaryExpr with `[` and handled in printer?
-                // `BinaryExpr` prints `(left op right)`. `(base [ key)`. Bad.
-                // I'll add `TableAccess` node quickly? I added `TableConstructor`.
-                // Checking AST.h ... `TableConstructor` yes. `TableAccess` no.
-                // I missed `TableAccess`.
-                // I will use `FunctionCall` with `is_method`=false? No.
-                // I will use `BinaryExpr` with op `[` and hack printer?
-                // No, I will add `TableAccess` to AST.h and Printer.
-                // It's cleaner.
-
-                // WAIT! I can't add to AST.h easily now without creating a mess of diffs.
-                // I'll use `BinaryExpr` with op `[` and modify `ASTPrinter` to handle `[` specifically?
-                // `visit(BinaryExpr)`: `out << "("; left; out << op; right; out << ")";`
-                // If I change printer to check op `[`, it works.
-                // `left[right]`.
-                // Good enough hack for now.
-                a_stmt->values.push_back(new BinaryExpr(base, "[", key));
-                current_block->add(a_stmt);
-                break;
-            }
-            case OP_GETTABLE: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "[", make_var(p, c, i))); current_block->add(a_stmt); break; }
-            case OP_SETTABUP: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(new BinaryExpr(make_upval(p, a), "[", ttisstring(&p->k[b]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[b])))) : make_const(p, b))); a_stmt->values.push_back(make_var(p, c, i)); current_block->add(a_stmt); break; }
-            case OP_SETTABLE: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(new BinaryExpr(make_var(p, a, i), "[", make_var(p, b, i))); a_stmt->values.push_back(make_const(p, c)); /* k handled in logic? */ if(!k) a_stmt->values.back() = make_var(p, c, i); current_block->add(a_stmt); break; }
-            case OP_SETFIELD: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(new BinaryExpr(make_var(p, a, i), "[", ttisstring(&p->k[b]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[b])))) : make_const(p, b))); a_stmt->values.push_back(k ? make_const(p, c) : make_var(p, c, i)); current_block->add(a_stmt); break; }
-            case OP_GETFIELD: { Assignment* a_stmt = new Assignment(false); a_stmt->targets.push_back(make_var(p, a, i)); a_stmt->values.push_back(new BinaryExpr(make_var(p, b, i), "[", ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : make_const(p, c))); current_block->add(a_stmt); break; }
-
-            case OP_SELF: {
-                Assignment* a1 = new Assignment(false);
-                a1->targets.push_back(make_var(p, a+1, i));
-                a1->values.push_back(make_var(p, b, i));
-                current_block->add(a1);
-
-                Assignment* a2 = new Assignment(false);
-                a2->targets.push_back(make_var(p, a, i));
-                Expression* key = ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : make_const(p, c);
-                a2->values.push_back(new BinaryExpr(make_var(p, b, i), "[", key));
-                current_block->add(a2);
-                break;
-            }
-
             case OP_RETURN: {
+                ctx.flush_all_pending(i);
                 ReturnStmt* ret = new ReturnStmt();
                 if (b > 0) {
-                    for(int j=0; j<b-1; j++) ret->values.push_back(make_var(p, a+j, i));
+                    for(int j=0; j<b-1; j++) ret->values.push_back(ctx.get_expr(a+j, i));
                 }
-                current_block->add(ret);
+                ctx.current_block->add(ret);
                 break;
             }
-            // ... (Implement other opcodes similarly)
-            // For brevity in this turn, I will implement generic "ExprStmt" for unknown ops or just comments
-            // But I should implement essential flow control.
 
             case OP_EQ: case OP_LT: case OP_LE: case OP_EQK: case OP_EQI:
             case OP_LTI: case OP_LEI: case OP_GTI: case OP_GEI:
             case OP_TEST: case OP_TESTSET: {
+                ctx.flush_all_pending(i); // Control flow
                 if (i + 1 < p->sizecode) {
                     AlccInstruction next_dec;
                     current_backend->decode_instruction((uint32_t)p->code[i+1], &next_dec);
                     if (next_dec.op == OP_JMP) {
                         int dest = i + 1 + 1 + next_dec.bx;
-
-                        // Check loops
                         bool is_while = false;
                         if (dest > i && dest <= p->sizecode) {
                              AlccInstruction back_inst;
@@ -646,21 +723,17 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                                  }
                              }
                         }
-
                         bool is_repeat = (dest <= i);
-
                         Expression* cond = nullptr;
-                        Expression* lhs = make_var(p, a, i);
+                        Expression* lhs = ctx.get_expr(a, i); // Should work even if flushed above as it returns var
                         Expression* rhs = nullptr;
                         std::string op_str = "==";
-
-                        // Construct Condition
                         if (op == OP_TEST || op == OP_TESTSET) {
                             cond = lhs;
                             if (k) cond = new UnaryExpr("not", cond);
                         } else {
-                            if (op == OP_EQ || op == OP_LT || op == OP_LE) rhs = make_var(p, b, i);
-                            else if (op == OP_EQK) rhs = make_const(p, b);
+                            if (op == OP_EQ || op == OP_LT || op == OP_LE) rhs = ctx.get_expr(b, i);
+                            else if (op == OP_EQK) rhs = ctx.make_const(b);
                             else rhs = new Literal((double)(b - OFFSET_sC));
 
                             if (op == OP_EQ || op == OP_EQK || op == OP_EQI) op_str = k ? "~=" : "==";
@@ -668,43 +741,38 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                             else if (op == OP_LE || op == OP_LEI) op_str = k ? ">" : "<=";
                             else if (op == OP_GTI) op_str = k ? "<=" : ">";
                             else if (op == OP_GEI) op_str = k ? "<" : ">=";
-
                             cond = new BinaryExpr(lhs, op_str, rhs);
                         }
 
                         if (is_while) {
                             Block* body = new Block();
                             WhileStmt* ws = new WhileStmt(cond, body);
-                            current_block->add(ws);
-                            bs_push(&bs, dest, BLOCK_WHILE, ws, body, i);
-                            current_block = body;
-                            i++; // skip JMP
+                            ctx.current_block->add(ws);
+                            bs_push(&ctx.bs, dest, BLOCK_WHILE, ws, body, i);
+                            ctx.current_block = body;
+                            i++;
                         } else if (is_repeat) {
-                            // End of repeat
-                            if (bs.top > 0 && bs.blocks[bs.top-1].type == BLOCK_REPEAT) {
-                                RepeatStmt* rs = (RepeatStmt*)bs.blocks[bs.top-1].ast_stmt;
+                            if (ctx.bs.top > 0 && ctx.bs.blocks[ctx.bs.top-1].type == BLOCK_REPEAT) {
+                                RepeatStmt* rs = (RepeatStmt*)ctx.bs.blocks[ctx.bs.top-1].ast_stmt;
                                 rs->condition = cond;
-                                bs.top--;
-                                if(bs.top>0) current_block = bs.blocks[bs.top-1].ast_block;
-                                else current_block = root_block;
+                                ctx.bs.top--;
+                                if(ctx.bs.top>0) ctx.current_block = ctx.bs.blocks[ctx.bs.top-1].ast_block;
+                                else ctx.current_block = root_block;
                             }
                             i++;
                         } else {
-                            // If
                             Block* then_blk = new Block();
                             if (pending_elseif) {
-                                IfStmt* if_stmt = (IfStmt*)bs.blocks[bs.top-1].ast_stmt;
+                                IfStmt* if_stmt = (IfStmt*)ctx.bs.blocks[ctx.bs.top-1].ast_stmt;
                                 if_stmt->clauses.push_back({cond, then_blk});
-                                // Update stack?
-                                bs.blocks[bs.top-1].ast_block = then_blk;
-                                // We are already inside IF block structure on stack
+                                ctx.bs.blocks[ctx.bs.top-1].ast_block = then_blk;
                             } else {
                                 IfStmt* if_stmt = new IfStmt();
                                 if_stmt->clauses.push_back({cond, then_blk});
-                                current_block->add(if_stmt);
-                                bs_push(&bs, dest, BLOCK_IF, if_stmt, then_blk);
+                                ctx.current_block->add(if_stmt);
+                                bs_push(&ctx.bs, dest, BLOCK_IF, if_stmt, then_blk);
                             }
-                            current_block = then_blk;
+                            ctx.current_block = then_blk;
                             pending_elseif = false;
                             i++;
                         }
@@ -714,29 +782,25 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                 break;
             }
 
-            // ... Default
             default:
-                 // Minimal fallback
+                 // Fallback or todo
                  break;
         }
 
         pending_elseif = false;
     }
 
+    // End flush
+    ctx.flush_all_pending(p->sizecode);
+
     return func_node;
 }
 
 void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const char* name_override) {
     ASTNode* root = build_ast(p, plugin);
-
-    if (plugin && plugin->on_ast_process) {
-        plugin->on_ast_process(root);
-    }
-
+    if (plugin && plugin->on_ast_process) plugin->on_ast_process(root);
     LuaPrinter printer;
     printer.indent_level = level;
     root->accept(printer);
     printf("\n");
-
-    // Clean up? We leak for now as per plan, or use a simple ASTContext destructor.
 }
