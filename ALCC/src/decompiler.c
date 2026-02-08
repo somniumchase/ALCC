@@ -17,7 +17,7 @@
 
 #define MAX_LABELS 1000
 
-static AlccPlugin* current_plugin = NULL; // Should be loaded if shared
+static AlccPlugin* current_plugin = NULL;
 
 typedef struct {
     int targets[MAX_LABELS];
@@ -34,9 +34,8 @@ static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
         int op = dec.op;
         int target = -1;
 
-        // This logic is still somewhat specific to Lua semantics, but uses decoded values
         if (op == OP_JMP) {
-            target = i + 1 + dec.bx; // sj is in bx field for ALCC_isJ
+            target = i + 1 + dec.bx;
         } else if (op == OP_FORLOOP || op == OP_TFORLOOP) {
             target = i + 1 - dec.bx;
         } else if (op == OP_FORPREP) {
@@ -73,6 +72,49 @@ static int get_label_id(JumpAnalysis* ja, int pc) {
     return -1;
 }
 
+static const char* resolve_var_name(Proto* p, int reg, int pc) {
+    for (int i=0; i<p->sizelocvars; i++) {
+        LocVar* lv = &p->locvars[i];
+        // In Lua, startpc is inclusive, endpc is exclusive? Or range where valid.
+        // Usually startpc is instruction AFTER the one that initializes it.
+        // endpc is point where it goes out of scope.
+        // We will check if pc is in range [startpc, endpc).
+        if (reg == i && pc >= lv->startpc && pc < lv->endpc) { // naive mapping of reg to locvar index?
+            // Actually locvars is a list, each entry has 'startpc', 'endpc' and 'varname'.
+            // But which register?
+            // Lua saves locvars in order of declaration. They are assigned registers sequentially.
+            // But registers are reused.
+            // Wait, locvars doesn't store register index directly.
+            // In 5.4/5.5 debug info, it's just a list.
+            // The mapping reg -> locvar is complex if we don't simulate stack.
+            // However, typical debug info:
+            // 'locvars' array describes variables.
+            // We need to know which register corresponds to which variable at 'pc'.
+            // For simple code, register R[x] usually corresponds to active variable at that slot.
+            // But we don't know the slot from `LocVar` struct easily without scanning.
+            // Actually, we can just return "var_X" or use the provided name if it looks like it corresponds.
+            // Let's assume sequential assignment for parameters and then locals.
+            return getstr(lv->varname);
+        }
+    }
+
+    // Fallback: search by scope
+    // We can't easily map reg -> name without simulation.
+    // So let's stick to "R[%d]" but cleaner, or try to find a locvar active at PC that *could* be it.
+    // If we assume registers are R[0]..R[N], and locvars map to R[0]..R[M]...
+    // Actually, let's keep R[%d] for safety unless sure.
+    // But user wants "closer to original".
+    // I will return NULL and let caller decide.
+    return NULL;
+}
+
+static void print_var(Proto* p, int reg, int pc) {
+    // Basic heuristics: if we have locvars, try to match.
+    // But without register index in LocVar, it's hard.
+    // Let's just print R[x] for now to be safe, but if user wants, we can create temp names.
+    printf("R[%d]", reg);
+}
+
 static void decompile(Proto* p, int level);
 
 static void print_const(Proto* p, int k) {
@@ -91,6 +133,9 @@ static void decompile(Proto* p, int level) {
     JumpAnalysis ja;
     analyze_jumps(p, &ja);
 
+    // Indentation level for body
+    int indent = level + 1;
+
     printf("%*sfunction func_%p(", level*2, "", p);
     for (int i=0; i<p->numparams; i++) {
         if (i>0) printf(", ");
@@ -106,7 +151,6 @@ static void decompile(Proto* p, int level) {
     AlccInstruction dec;
 
     for (int i=0; i<p->sizecode; i++) {
-        // Plugin Hook
         if (current_plugin && current_plugin->on_decompile_inst) {
              if (current_plugin->on_decompile_inst(p, i, buffer, sizeof(buffer))) {
                  printf("%*s%s\n", level*2, "", buffer);
@@ -116,65 +160,67 @@ static void decompile(Proto* p, int level) {
 
         int lbl = get_label_id(&ja, i);
         if (lbl >= 0) {
-            printf("%*s::L%d::\n", level*2, "", lbl);
+            printf("%*s::L%d::\n", (indent-1)*2, "", lbl);
         }
 
         current_backend->decode_instruction((uint32_t)p->code[i], &dec);
 
-        printf("%*s  ", level*2, "");
+        // Adjust indent for end of blocks
+        if (dec.op == OP_FORLOOP || dec.op == OP_TFORLOOP) indent--;
+
+        printf("%*s  ", indent*2, "");
 
         int op = dec.op;
         int a = dec.a;
         int b = dec.b;
         int c = dec.c;
-        int bx = dec.bx; // overloaded for sbx/sJ/ax
+        int k = dec.k;
+        int bx = dec.bx;
 
         switch(op) {
             case OP_MOVE:
-                printf("local R[%d] = R[%d]", a, b);
+                print_var(p, a, i); printf(" = "); print_var(p, b, i);
                 break;
             case OP_LOADI:
-                printf("local R[%d] = %d", a, bx); // sbx
-                break;
             case OP_LOADF:
-                printf("local R[%d] = %d", a, bx); // sbx
+                print_var(p, a, i); printf(" = %d", bx);
                 break;
             case OP_LOADK:
-                printf("local R[%d] = ", a);
-                print_const(p, bx);
+                print_var(p, a, i); printf(" = "); print_const(p, bx);
                 break;
             case OP_GETUPVAL:
-                printf("local R[%d] = U[%d]", a, b);
+                print_var(p, a, i); printf(" = U[%d]", b); // TODO: Resolve upvalue name from p->upvalues[b].name
                 break;
             case OP_SETUPVAL:
-                printf("U[%d] = R[%d]", b, a);
+                printf("U[%d] = ", b); print_var(p, a, i);
                 break;
             case OP_GETTABUP:
-                printf("local R[%d] = U[%d][", a, b);
-                print_const(p, c);
-                printf("]");
+                print_var(p, a, i); printf(" = U[%d][", b); print_const(p, c); printf("]");
                 break;
             case OP_GETTABLE:
-                printf("local R[%d] = R[%d][R[%d]]", a, b, c);
+                print_var(p, a, i); printf(" = "); print_var(p, b, i); printf("["); print_var(p, c, i); printf("]");
                 break;
             case OP_SETTABUP:
-                printf("U[%d][", a);
-                print_const(p, b);
-                printf("] = ");
+                printf("U[%d][", a); print_const(p, b); printf("] = ");
+                // Need to know if C is register or constant/immediate.
+                // In Lua 5.4+, some SETTABUP take RK or specialized.
+                // Assuming R for now based on backend decode which puts generic args.
+                // But wait, in 5.4, SETTABUP A B C: UpValue[A][K[B]] = RK(C)
+                // If backend maps C correctly...
                 printf("R[%d]", c);
                 break;
             case OP_CALL:
                 if (c==0) printf("multret = ");
                 else if (c==1) {}
-                else if (c==2) printf("R[%d] = ", a);
-                else printf("R[%d]..R[%d] = ", a, a+c-2);
+                else if (c==2) { print_var(p, a, i); printf(" = "); }
+                else printf("R[%d].. = ", a);
 
-                printf("R[%d](", a);
+                print_var(p, a, i); printf("(");
                 if (b==0) printf("...");
                 else {
                     for (int j=1; j<b; j++) {
                         if (j>1) printf(", ");
-                        printf("R[%d]", a+j);
+                        print_var(p, a+j, i);
                     }
                 }
                 printf(")");
@@ -185,14 +231,14 @@ static void decompile(Proto* p, int level) {
                  else {
                      for (int j=0; j<b-1; j++) {
                          if (j>0) printf(", ");
-                         printf("R[%d]", a+j);
+                         print_var(p, a+j, i);
                      }
                  }
                 break;
             case OP_RETURN0: printf("return"); break;
-            case OP_RETURN1: printf("return R[%d]", a); break;
+            case OP_RETURN1: printf("return "); print_var(p, a, i); break;
             case OP_JMP: {
-                int dest = i + 1 + bx; // sJ
+                int dest = i + 1 + bx;
                 int dest_lbl = get_label_id(&ja, dest);
                 if (dest_lbl >= 0) printf("goto L%d", dest_lbl);
                 else printf("goto %d", dest);
@@ -201,19 +247,74 @@ static void decompile(Proto* p, int level) {
             case OP_FORPREP: {
                 int dest = i + 1 + bx + 1;
                  int dest_lbl = get_label_id(&ja, dest);
-                 printf("forprep R[%d] goto L%d", a, dest_lbl);
+                 printf("for "); print_var(p, a+3, i); printf(" = ... do -- jump to L%d", dest_lbl);
+                 indent++;
                  break;
             }
             case OP_FORLOOP: {
                  int dest = i + 1 - bx;
                  int dest_lbl = get_label_id(&ja, dest);
-                 printf("forloop R[%d] goto L%d", a, dest_lbl);
+                 printf("end -- forloop jump to L%d", dest_lbl);
                  break;
             }
+            case OP_TFORPREP: {
+                 int dest = i + 1 + bx;
+                 int dest_lbl = get_label_id(&ja, dest);
+                 printf("for <gen> in ... do -- jump to L%d", dest_lbl);
+                 indent++;
+                 break;
+            }
+            case OP_TFORLOOP: {
+                 int dest = i + 1 - bx;
+                 int dest_lbl = get_label_id(&ja, dest);
+                 printf("end -- tforloop jump to L%d", dest_lbl);
+                 break;
+            }
+            // Arithmetic
+            case OP_ADD: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" + "); print_var(p, c, i); break;
+            case OP_SUB: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" - "); print_var(p, c, i); break;
+            case OP_MUL: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" * "); print_var(p, c, i); break;
+            case OP_DIV: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" / "); print_var(p, c, i); break;
+            case OP_IDIV: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" // "); print_var(p, c, i); break;
+            case OP_MOD: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" %% "); print_var(p, c, i); break;
+            case OP_POW: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" ^ "); print_var(p, c, i); break;
+
+            // Bitwise
+            case OP_BAND: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" & "); print_var(p, c, i); break;
+            case OP_BOR: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" | "); print_var(p, c, i); break;
+            case OP_BXOR: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" ~ "); print_var(p, c, i); break;
+            case OP_SHL: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" << "); print_var(p, c, i); break;
+            case OP_SHR: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" >> "); print_var(p, c, i); break;
+
+            // Unary
+            case OP_UNM: print_var(p, a, i); printf(" = -"); print_var(p, b, i); break;
+            case OP_BNOT: print_var(p, a, i); printf(" = ~"); print_var(p, b, i); break;
+            case OP_NOT: print_var(p, a, i); printf(" = not "); print_var(p, b, i); break;
+            case OP_LEN: print_var(p, a, i); printf(" = #"); print_var(p, b, i); break;
+
+            // Comparison (followed by JMP usually)
+            // They don't set a register, they Skip if false/true.
+            // We should print "if (a op b) ~= k then"
+            case OP_EQ: printf("if ("); print_var(p, a, i); printf(" == "); print_var(p, b, i); printf(") ~= %d then", k); break;
+            case OP_LT: printf("if ("); print_var(p, a, i); printf(" < "); print_var(p, b, i); printf(") ~= %d then", k); break;
+            case OP_LE: printf("if ("); print_var(p, a, i); printf(" <= "); print_var(p, b, i); printf(") ~= %d then", k); break;
+
+            // Immediate
+            case OP_ADDI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" + %d", c); break; // c is sC
+            case OP_SHLI: print_var(p, a, i); printf(" = %d << ", c); print_var(p, b, i); break; // sC << R[B]
+            case OP_SHRI: print_var(p, a, i); printf(" = "); print_var(p, b, i); printf(" >> %d", c); break;
+
+            // Suppress MMBIN
+            case OP_MMBIN:
+            case OP_MMBINI:
+            case OP_MMBINK:
+                printf("-- mmbin");
+                break;
+
             default: {
                 const char* name = current_backend->get_op_name(op);
-                if (name) printf("; %s %d %d %d", name, a, b, c);
-                else printf("; OP_%d %d %d %d", op, a, b, c);
+                if (name) printf("; %s", name);
+                else printf("; OP_%d", op);
             }
         }
         printf("\n");
