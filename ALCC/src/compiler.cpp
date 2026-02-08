@@ -2,8 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "lua.h"
-#include "lauxlib.h"
 #include "alcc_utils.h"
 
 int main(int argc, char** argv) {

@@ -2,11 +2,13 @@
 
 #include <stdio.h>
 #include <string.h>
+extern "C" {
 #include "lua.h"
 #include "lobject.h"
-#include "alcc_plugin.h"
 #include "lopcodes.h"
 #include "lopnames.h"
+}
+#include "alcc_plugin.h"
 
 static void my_post_load(lua_State* L, Proto* p) {
     (void)L;
@@ -57,6 +59,6 @@ static AlccPlugin plugin = {
     my_on_decompile_inst
 };
 
-AlccPlugin* alcc_plugin_init(void) {
+extern "C" AlccPlugin* alcc_plugin_init(void) {
     return &plugin;
 }

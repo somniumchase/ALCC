@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 
+extern "C" {
 #include "lua.h"
 #include "lauxlib.h"
 #include "lobject.h"
@@ -14,6 +15,7 @@
 #include "lopcodes.h"
 #include "lstring.h"
 #include "lmem.h"
+}
 #include "alcc_utils.h"
 #include "alcc_backend.h"
 #include "../plugin/alcc_plugin.h"

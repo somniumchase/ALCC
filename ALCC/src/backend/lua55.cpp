@@ -1,8 +1,10 @@
 #define LUA_CORE
 
 #include "../core/alcc_backend.h"
+extern "C" {
 #include "lopcodes.h"
 #include "lopnames.h"
+}
 #include <string.h>
 
 static AlccOpMode map_mode(enum OpMode m) {
