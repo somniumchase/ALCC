@@ -17,6 +17,7 @@ on:
         options:
           - x86_64
           - aarch64
+          - android-aarch64
 
 jobs:
   build:
@@ -52,6 +53,12 @@ jobs:
 
           sudo apt-get update
           sudo apt-get install -y g++-aarch64-linux-gnu gcc-aarch64-linux-gnu libc6-dev-arm64-cross libreadline-dev:arm64
+        elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
+          echo "Building for Android (Termux). Using NDK at $ANDROID_NDK_HOME"
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+             echo "Error: ANDROID_NDK_HOME is not set."
+             exit 1
+          fi
         else
           sudo apt-get update
           sudo apt-get install -y libreadline-dev
@@ -77,6 +84,13 @@ jobs:
         cd lua_source
         if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
            make linux CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
+        elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
+           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+           CC="$NDK_TOOLCHAIN/aarch64-linux-android24-clang"
+           AR="$NDK_TOOLCHAIN/llvm-ar rcu"
+           RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
+           # Use posix to avoid readline, but enable dlopen and standard Lua libs
+           make posix CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" SYSCFLAGS="-DLUA_USE_LINUX" SYSLIBS="-Wl,-E -lm -ldl"
         else
            make all CC="ccache gcc"
         fi
@@ -88,6 +102,12 @@ jobs:
         if [ ! -f "liblua.a" ]; then
            if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
              make linux CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
+           elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
+             NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+             CC="$NDK_TOOLCHAIN/aarch64-linux-android24-clang"
+             AR="$NDK_TOOLCHAIN/llvm-ar rcu"
+             RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
+             make posix CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" SYSCFLAGS="-DLUA_USE_LINUX" SYSLIBS="-Wl,-E -lm -ldl"
            else
              make all CC="ccache gcc"
            fi
@@ -98,6 +118,10 @@ jobs:
         cd ALCC
         if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
            make CXX="ccache aarch64-linux-gnu-g++"
+        elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
+           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+           CXX="$NDK_TOOLCHAIN/aarch64-linux-android24-clang++"
+           make CXX="ccache $CXX"
         else
            make CXX="ccache g++"
         fi
