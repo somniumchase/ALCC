@@ -1,6 +1,8 @@
 #ifndef ALCC_PLUGIN_H
 #define ALCC_PLUGIN_H
 
+#include <stdio.h>
+
 extern "C" {
 #include "lua.h"
 #include "lobject.h" // For Proto
