@@ -1,0 +1,11 @@
+alcc-c
+alcc-d
+alcc-a
+alcc-dec
+*.o
+*.luac
+*.asm
+*.dec.lua
+test_clean.asm
+test_new_clean.asm
+output.txt
