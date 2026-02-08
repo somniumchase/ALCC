@@ -17,6 +17,13 @@ extern "C" {
 #include "../core/alcc_backend.h"
 
 #define MAX_LABELS 1000
+#define BLOCK_IF 0
+#define BLOCK_LOOP 1
+#define BLOCK_WHILE 2
+#define BLOCK_REPEAT 3
+
+#define TARGET_NORMAL 0
+#define TARGET_REPEAT 1
 
 static int is_identifier(const char* s) {
     size_t len = strlen(s);
@@ -42,12 +49,14 @@ static int is_identifier(const char* s) {
 // Internal structures
 struct JumpAnalysis {
     int targets[MAX_LABELS];
+    int types[MAX_LABELS];
     int count;
 };
 
 // Block Stack for structured control flow
 struct Block {
     int target_pc; // PC where the block ends
+    int start_pc;  // PC where the block starts (for loops)
     int type;      // 0: IF, 1: LOOP
 };
 
@@ -58,31 +67,39 @@ struct BlockStack {
 
 // Helper functions (static to this file)
 
-static void bs_push(BlockStack* bs, int target, int type) {
+static void bs_push(BlockStack* bs, int target, int type, int start_pc = -1) {
     if (bs->top < 100) {
         bs->blocks[bs->top].target_pc = target;
+        bs->blocks[bs->top].start_pc = start_pc;
         bs->blocks[bs->top].type = type;
         bs->top++;
     }
 }
 
 static int bs_check_end(BlockStack* bs, int pc, Proto* p) {
-    if (bs->top > 0 && bs->blocks[bs->top-1].target_pc <= pc) {
-        // Check for ELSE block transition
-        if (pc > 0) {
-             Instruction prev = p->code[pc-1];
-             if (GET_OPCODE(prev) == OP_JMP) {
-                 int sJ = GETARG_sJ(prev);
-                 int target = pc + sJ;
+    if (bs->top > 0) {
+        // For REPEAT, we don't have a fixed target_pc in the forward sense (it ends at conditional).
+        // But we handle popping manually in the conditional block.
+        if (bs->blocks[bs->top-1].type == BLOCK_REPEAT) return 0;
 
-                 if (target > pc) {
-                     bs->blocks[bs->top-1].target_pc = target;
-                     return 2; // Signal ELSE
+        if (bs->blocks[bs->top-1].target_pc <= pc) {
+            // Check for ELSE block transition
+            if (pc > 0) {
+                 Instruction prev = p->code[pc-1];
+                 if (GET_OPCODE(prev) == OP_JMP) {
+                     int sJ = GETARG_sJ(prev);
+                     int target = pc + sJ;
+
+                     // Only treat as ELSE if it's an IF block, not WHILE/LOOP
+                     if (bs->blocks[bs->top-1].type == BLOCK_IF && target > pc) {
+                         bs->blocks[bs->top-1].target_pc = target;
+                         return 2; // Signal ELSE
+                     }
                  }
-             }
+            }
+            bs->top--;
+            return 1; // Signal END
         }
-        bs->top--;
-        return 1; // Signal END
     }
     return 0;
 }
@@ -91,11 +108,13 @@ static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
     ja->count = 0;
     AlccInstruction dec;
 
+    // First pass: identify all targets
     for (int i=0; i<p->sizecode; i++) {
         current_backend->decode_instruction((uint32_t)p->code[i], &dec);
 
         int op = dec.op;
         int target = -1;
+        int type = TARGET_NORMAL;
 
         if (op == OP_JMP) {
             target = i + 1 + dec.bx;
@@ -103,15 +122,34 @@ static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
             target = i + 1 - dec.bx;
         } else if (op == OP_FORPREP) {
             target = i + 1 + dec.bx + 1;
+        } else if (op == OP_EQ || op == OP_LT || op == OP_LE || op == OP_EQK || op == OP_EQI ||
+                   op == OP_LTI || op == OP_LEI || op == OP_GTI || op == OP_GEI ||
+                   op == OP_TEST || op == OP_TESTSET) {
+            // Check for backward conditional jump (repeat..until)
+             if (i + 1 < p->sizecode) {
+                 AlccInstruction next;
+                 current_backend->decode_instruction((uint32_t)p->code[i+1], &next);
+                 if (next.op == OP_JMP) {
+                     int dest = i + 1 + 1 + next.bx;
+                     if (dest <= i) {
+                         target = dest;
+                         type = TARGET_REPEAT;
+                     }
+                 }
+             }
         }
 
         if (target >= 0 && target < p->sizecode) {
-            int found = 0;
+            int found = -1;
             for (int j=0; j<ja->count; j++) {
-                if (ja->targets[j] == target) { found=1; break; }
+                if (ja->targets[j] == target) { found=j; break; }
             }
-            if (!found && ja->count < MAX_LABELS) {
-                ja->targets[ja->count++] = target;
+            if (found >= 0) {
+                 if (type == TARGET_REPEAT) ja->types[found] = TARGET_REPEAT;
+            } else if (ja->count < MAX_LABELS) {
+                ja->targets[ja->count] = target;
+                ja->types[ja->count] = type;
+                ja->count++;
             }
         }
     }
@@ -123,6 +161,10 @@ static void analyze_jumps(Proto* p, JumpAnalysis* ja) {
                 int tmp = ja->targets[i];
                 ja->targets[i] = ja->targets[j];
                 ja->targets[j] = tmp;
+
+                tmp = ja->types[i];
+                ja->types[i] = ja->types[j];
+                ja->types[j] = tmp;
             }
         }
     }
@@ -133,6 +175,13 @@ static int get_label_id(JumpAnalysis* ja, int pc) {
         if (ja->targets[i] == pc) return i;
     }
     return -1;
+}
+
+static int get_label_type(JumpAnalysis* ja, int pc) {
+    for (int i=0; i<ja->count; i++) {
+        if (ja->targets[i] == pc) return ja->types[i];
+    }
+    return TARGET_NORMAL;
 }
 
 static void print_var(Proto* p, int reg, int pc) {
@@ -254,7 +303,17 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
         }
 
         int lbl = get_label_id(&ja, i);
+        int lbl_type = get_label_type(&ja, i);
+
+        // Check for REPEAT start
+        if (lbl_type == TARGET_REPEAT) {
+             printf("%*srepeat\n", indent*2, "");
+             bs_push(&bs, -1, BLOCK_REPEAT, i); // -1 target as it ends conditionally
+             indent++;
+        }
+
         if (lbl >= 0) {
+            // Even if repeat, we print label for goto safety
             printf("%*s::L%d::\n", (indent-1)*2, "", lbl);
         }
 
@@ -527,17 +586,27 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
             case OP_RETURN1: printf("return "); print_var(p, a, i); break;
             case OP_JMP: {
                 int is_else_jump = 0;
+                int is_while_back = 0;
+
                 if (bs.top > 0) {
                      int current_target = bs.blocks[bs.top-1].target_pc;
-                     if (i == current_target - 1) {
+                     // Check for ELSE jump
+                     if (bs.blocks[bs.top-1].type == BLOCK_IF && i == current_target - 1) {
                          int dest = i + 1 + bx;
                          if (dest > current_target) {
                              is_else_jump = 1;
                          }
                      }
+                     // Check for WHILE back jump
+                     if (bs.blocks[bs.top-1].type == BLOCK_WHILE) {
+                         int dest = i + 1 + bx;
+                         if (dest == bs.blocks[bs.top-1].start_pc) {
+                             is_while_back = 1;
+                         }
+                     }
                 }
 
-                if (!is_else_jump) {
+                if (!is_else_jump && !is_while_back) {
                     int dest = i + 1 + bx;
                     int dest_lbl = get_label_id(&ja, dest);
                     if (dest_lbl >= 0) printf("goto L%d", dest_lbl);
@@ -636,10 +705,54 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
                     if (next_dec.op == OP_JMP) {
                         int dest = i + 1 + 1 + next_dec.bx;
 
-                        if (pending_elseif) {
-                             // No "if "
+                        // Check for WHILE loop (forward jump to dest, dest-1 is jump back to here)
+                        // Note: 'i' is the PC of this instruction. 'dest' is target of the conditional jump (loop exit).
+                        // If it's a while loop, instruction at dest-1 should be JMP to i.
+                        // Or JMP to i's label if labeled.
+                        int is_while = 0;
+                        if (dest > i) {
+                             if (dest > 0 && dest <= p->sizecode) {
+                                 // Check instruction at dest-1 (back-edge)
+                                 AlccInstruction back_inst;
+                                 // dest is 0-based index of instruction *following* the loop block?
+                                 // Yes.
+                                 current_backend->decode_instruction((uint32_t)p->code[dest-1], &back_inst);
+                                 if (back_inst.op == OP_JMP) {
+                                     int back_dest = (dest - 1) + 1 + back_inst.bx;
+                                     if (back_dest == i) { // Jumps exactly to this instruction
+                                         is_while = 1;
+                                     } else if (lbl >= 0 && back_dest == i) { // Jumps to label? (Same pc)
+                                          is_while = 1;
+                                     }
+                                     // Check against labeled start?
+                                     // analyze_jumps ensures labels are at correct PC.
+                                 }
+                             }
+                        }
+
+                        // Check for REPEAT UNTIL (backward jump)
+                        int is_repeat_until = 0;
+                        if (dest <= i) {
+                            is_repeat_until = 1;
+                        }
+
+                        if (is_while) {
+                             printf("while ");
+                        } else if (is_repeat_until) {
+                             // For repeat..until, we are at the end.
+                             // We should check if we are in a REPEAT block.
+                             if (bs.top > 0 && bs.blocks[bs.top-1].type == BLOCK_REPEAT) {
+                                 indent--; // Decrease indent for 'until' line
+                                 printf("%*suntil ", indent*2, "");
+                             } else {
+                                 printf("until (orphaned) ");
+                             }
                         } else {
-                             printf("if ");
+                             if (pending_elseif) {
+                                 // No "if "
+                             } else {
+                                 printf("if ");
+                             }
                         }
 
                         if (op == OP_TEST || op == OP_TESTSET) {
@@ -668,20 +781,32 @@ void DecompilerCore::decompile(Proto* p, int level, AlccPlugin* plugin, const ch
                             else if (op == OP_EQK) print_const(p, b);
                             else printf("%d", b - OFFSET_sC);
                         }
-                        printf(" then");
 
-                        if (!pending_elseif) {
+                        if (is_while) {
+                            printf(" do");
                             indent++;
+                            bs_push(&bs, dest, BLOCK_WHILE, i);
+                            pending_elseif = false;
+                            i++; // skip JMP
+                            break;
+                        } else if (is_repeat_until) {
+                            // End of repeat block
+                            if (bs.top > 0 && bs.blocks[bs.top-1].type == BLOCK_REPEAT) {
+                                bs.top--;
+                            }
+                            pending_elseif = false;
+                            i++; // skip JMP
+                            break;
+                        } else {
+                            printf(" then");
+                            if (!pending_elseif) {
+                                indent++;
+                            }
+                            pending_elseif = false;
+                            bs_push(&bs, dest, BLOCK_IF, i);
+                            i++; // skip JMP
+                            break;
                         }
-
-                        // We do NOT reset pending_elseif here because the next iteration needs it?
-                        // No, pending_elseif was used to suppress 'if' and 'indent'.
-                        // Now we are done with the header.
-                        pending_elseif = false;
-
-                        bs_push(&bs, dest, 0);
-                        i++;
-                        break;
                     }
                 }
 
