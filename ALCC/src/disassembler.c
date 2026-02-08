@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <dlfcn.h>
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -11,37 +13,33 @@
 #include "lfunc.h"
 #include "lopcodes.h"
 #include "lopnames.h"
-#include <ctype.h>
+#include "alcc_utils.h"
+#include "../plugin/alcc_plugin.h"
 
-static void print_string(const char* s, size_t len) {
-    printf("\"");
-    for (size_t i=0; i<len; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (c == '"') printf("\\\"");
-        else if (c == '\\') printf("\\\\");
-        else if (c == '\n') printf("\\n");
-        else if (c == '\r') printf("\\r");
-        else if (c == '\t') printf("\\t");
-        else if (isprint(c)) printf("%c", c);
-        else printf("\\x%02x", c);
-    }
-    printf("\"");
-}
+static AlccPlugin* current_plugin = NULL;
 
 static void print_proto(Proto* p, int level);
 
 static void print_code(Proto* p, int level) {
+    char buffer[4096];
+
     for (int i = 0; i < p->sizecode; i++) {
         Instruction inst = p->code[i];
         OpCode op = GET_OPCODE(inst);
 
-        printf("%*s[%03d] %-12s", level*2, "", i+1, opnames[op]);
+        printf("%*s[%03d] ", level*2, "", i+1);
+
+        // Plugin Hook
+        if (current_plugin && current_plugin->on_instruction) {
+            if (current_plugin->on_instruction(p, i, buffer, sizeof(buffer))) {
+                printf("%s\n", buffer);
+                continue;
+            }
+        }
+
+        printf("%-12s", opnames[op]);
 
         int a = GETARG_A(inst);
-        // We use macros that don't check opmode for printing raw values safely?
-        // Actually the macros in lopcodes.h usually check opmode with assert/check_exp.
-        // If we compile without NDEBUG, assertions might fail if we call GETARG_B on iAsBx.
-        // But here we switch on mode.
 
         switch (getOpMode(op)) {
             case iABC:
@@ -74,7 +72,7 @@ static void print_code(Proto* p, int level) {
                 TValue* k = &p->k[bx];
                 if (ttisstring(k)) {
                     printf(" ; ");
-                    print_string(getstr(tsvalue(k)), tsslen(tsvalue(k)));
+                    alcc_print_string(getstr(tsvalue(k)), tsslen(tsvalue(k)));
                 }
                 else if (ttisinteger(k)) printf(" ; %lld", ivalue(k));
                 else if (ttisnumber(k)) printf(" ; %f", fltvalue(k));
@@ -93,7 +91,7 @@ static void print_proto(Proto* p, int level) {
     for (int i = 0; i < p->sizeupvalues; i++) {
         Upvaldesc* u = &p->upvalues[i];
         printf("%*s  [%d] ", level*2, "", i);
-        if (u->name) print_string(getstr(u->name), tsslen(u->name));
+        if (u->name) alcc_print_string(getstr(u->name), tsslen(u->name));
         else printf("(no name)");
         printf(" %d %d %d\n", u->instack, u->idx, u->kind);
     }
@@ -106,7 +104,7 @@ static void print_proto(Proto* p, int level) {
             if (ttisinteger(k)) printf("%lld", ivalue(k));
             else printf("%f", fltvalue(k));
         } else if (ttisstring(k)) {
-            print_string(getstr(tsvalue(k)), tsslen(tsvalue(k)));
+            alcc_print_string(getstr(tsvalue(k)), tsslen(tsvalue(k)));
         } else if (ttisnil(k)) {
             printf("nil");
         } else if (ttisboolean(k)) {
@@ -126,29 +124,70 @@ static void print_proto(Proto* p, int level) {
     }
 }
 
+static void load_plugin(const char* path) {
+    void* handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+    if (!handle) {
+        fprintf(stderr, "Error loading plugin %s: %s\n", path, dlerror());
+        exit(1);
+    }
+
+    alcc_plugin_init_fn init = (alcc_plugin_init_fn)dlsym(handle, "alcc_plugin_init");
+    if (!init) {
+        fprintf(stderr, "Plugin %s does not export alcc_plugin_init\n", path);
+        exit(1);
+    }
+
+    current_plugin = init();
+    printf("; Loaded plugin: %s\n", current_plugin->name);
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s input.luac\n", argv[0]);
+        fprintf(stderr, "Usage: %s input.luac [-p plugin.so]\n", argv[0]);
         return 1;
     }
 
-    lua_State* L = luaL_newstate();
+    const char* input_file = NULL;
+
+    for (int i=1; i<argc; i++) {
+        if (strcmp(argv[i], "-p") == 0) {
+            if (i+1 < argc) {
+                load_plugin(argv[i+1]);
+                i++;
+            } else {
+                fprintf(stderr, "Missing plugin path\n");
+                return 1;
+            }
+        } else {
+            input_file = argv[i];
+        }
+    }
+
+    if (!input_file) {
+        fprintf(stderr, "Input file required\n");
+        return 1;
+    }
+
+    lua_State* L = alcc_newstate();
     if (!L) return 1;
 
-    if (luaL_loadfile(L, argv[1]) != LUA_OK) {
+    if (luaL_loadfile(L, input_file) != LUA_OK) {
         fprintf(stderr, "Error loading file: %s\n", lua_tostring(L, -1));
         return 1;
     }
 
-    // Access top of stack
     StkId o = L->top.p - 1;
     if (!ttisLclosure(s2v(o))) {
-        fprintf(stderr, "Not a Lua closure (maybe it is a binary chunk from different version or stripped?)\n");
+        fprintf(stderr, "Not a Lua closure\n");
         return 1;
     }
 
     LClosure* cl_obj = clLvalue(s2v(o));
     Proto* p = cl_obj->p;
+
+    if (current_plugin && current_plugin->post_load) {
+        current_plugin->post_load(L, p);
+    }
 
     print_proto(p, 0);
 
