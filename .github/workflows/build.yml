@@ -32,14 +32,14 @@ jobs:
         rm -rf lua_source
         git clone https://github.com/lua/lua.git lua_source
         cd lua_source
-        make linux
+        make all
 
     - name: Ensure Lua Built (if cached)
       if: steps.cache-lua.outputs.cache-hit == 'true'
       run: |
         cd lua_source
         if [ ! -f "liblua.a" ]; then
-           make linux
+           make all
         fi
 
     - name: Build ALCC
