@@ -72,6 +72,12 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "Missing template name\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--list-templates") == 0) {
+            printf("Available templates:\n");
+            for (const auto& name : TemplateFactory::instance().get_available_templates()) {
+                printf("  %s\n", name.c_str());
+            }
+            return 0;
         } else {
             input_file = argv[i];
         }
