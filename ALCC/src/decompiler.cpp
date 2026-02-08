@@ -381,29 +381,51 @@ static void decompile(Proto* p, int level) {
                 break;
             }
             case OP_FORPREP: {
-                int dest = i + 1 + bx + 1;
-                 int dest_lbl = get_label_id(&ja, dest);
-                 printf("for "); print_var(p, a+3, i); printf(" = ... do -- jump to L%d", dest_lbl);
-                 indent++;
-                 break;
+                // int dest = i + 1 + bx + 1;
+                printf("for "); print_var(p, a+3, i); printf(" = ");
+                print_var(p, a, i); printf(", ");
+                print_var(p, a+1, i); printf(", ");
+                print_var(p, a+2, i); printf(" do");
+                indent++;
+                break;
             }
             case OP_FORLOOP: {
-                 int dest = i + 1 - bx;
-                 int dest_lbl = get_label_id(&ja, dest);
-                 printf("end -- forloop jump to L%d", dest_lbl);
+                 printf("end");
                  break;
             }
             case OP_TFORPREP: {
                  int dest = i + 1 + bx;
-                 int dest_lbl = get_label_id(&ja, dest);
-                 printf("for <gen> in ... do -- jump to L%d", dest_lbl);
+                 int nvars = 0;
+                 if (dest < p->sizecode) {
+                     AlccInstruction target_inst;
+                     current_backend->decode_instruction((uint32_t)p->code[dest], &target_inst);
+                     if (target_inst.op == OP_TFORCALL) {
+                         nvars = target_inst.c;
+                     }
+                 }
+
+                 printf("for ");
+                 if (nvars > 0) {
+                     for (int j=0; j<nvars; j++) {
+                         if (j>0) printf(", ");
+                         print_var(p, a+4+j, i);
+                     }
+                 } else {
+                     printf("<vars>");
+                 }
+                 printf(" in ");
+                 print_var(p, a, i); printf(", ");
+                 print_var(p, a+1, i); printf(", ");
+                 print_var(p, a+2, i); printf(" do");
                  indent++;
                  break;
             }
+            case OP_TFORCALL: {
+                // Suppress output as it's part of the loop structure
+                break;
+            }
             case OP_TFORLOOP: {
-                 int dest = i + 1 - bx;
-                 int dest_lbl = get_label_id(&ja, dest);
-                 printf("end -- tforloop jump to L%d", dest_lbl);
+                 printf("end");
                  break;
             }
             // Arithmetic
@@ -456,82 +478,50 @@ static void decompile(Proto* p, int level) {
                         int dest = i + 1 + 1 + next_dec.bx; // pc+1 (next) + 1 + offset
 
                         // Print condition
-                        printf("if (");
+                        printf("if ");
                         if (op == OP_TEST || op == OP_TESTSET) {
-                           if (op == OP_TESTSET) {
-                               print_var(p, a, i); printf(" := "); // assignment side effect
-                           }
-                           // condition is implicitly on A (or B for TESTSET?)
-                           // OP_TESTSET A B k: if (not R[B] == k) then pc++ else R[A] := R[B]
-                           // Wait, if condition met (skip), no assignment?
-                           // Actually the instruction sets R[A] only if NOT skipping?
-                           // No, usually TESTSET is `A = B` if B is true/false.
-                           // `if (R[B]) R[A] = R[B]`.
-                           // For decompiler, simplified:
+                           if (k) printf("not "); // k=1 (Skip if True?) -> if not A. Wait.
+                           // TEST A 0 -> Skip if True -> Body if True -> if A. (k=0 -> A)
+                           // TEST A 1 -> Skip if False -> Body if False -> if not A. (k=1 -> not A)
+                           // So if (k) print not.
+
                            if (op == OP_TESTSET) print_var(p, b, i);
                            else print_var(p, a, i);
                         } else {
                             print_var(p, a, i);
 
                             const char* op_str = "??";
-                            if (op == OP_EQ || op == OP_EQK || op == OP_EQI) op_str = "==";
-                            else if (op == OP_LT || op == OP_LTI) op_str = "<";
-                            else if (op == OP_LE || op == OP_LEI) op_str = "<=";
-                            else if (op == OP_GTI) op_str = ">";
-                            else if (op == OP_GEI) op_str = ">=";
+                            // Basic operators
+                            // k=1: Skip if False (condition not met) -> Body if True (condition met)
+                            // Wait, for comparison:
+                            // k=0: Skip if True (condition met). Body if True. -> Operator as is.
+                            // k=1: Skip if False (condition not met). Body if False. -> Inverted Operator?
+
+                            // EQ: k=0 (Skip if True/Equal) -> ==
+                            // EQ: k=1 (Skip if False/NotEqual) -> ~=
+
+                            // LT: k=0 (Skip if True/Less) -> <
+                            // LT: k=1 (Skip if False/NotLess) -> >=
+
+                            if (op == OP_EQ || op == OP_EQK || op == OP_EQI) {
+                                op_str = (k) ? "~=" : "==";
+                            } else if (op == OP_LT || op == OP_LTI) {
+                                op_str = (k) ? ">=" : "<";
+                            } else if (op == OP_LE || op == OP_LEI) {
+                                op_str = (k) ? ">" : "<=";
+                            } else if (op == OP_GTI) {
+                                op_str = (k) ? "<=" : ">";
+                            } else if (op == OP_GEI) {
+                                op_str = (k) ? "<" : ">=";
+                            }
 
                             printf(" %s ", op_str);
 
                             if (op == OP_EQ || op == OP_LT || op == OP_LE) print_var(p, b, i);
-                            else if (op == OP_EQK) print_const(p, b); // b is Bx or B? iABC so B.
-                            else if (op == OP_EQI || op == OP_LTI || op == OP_LEI || op == OP_GTI || op == OP_GEI) printf("%d", b - OFFSET_sC);
+                            else if (op == OP_EQK) print_const(p, b);
+                            else printf("%d", b - OFFSET_sC);
                         }
-                        printf(")");
-
-                        // k handling
-                        // if ((cond) ~= k) skip (true block)
-                        // so if k=0 (false), skip if (cond != 0) -> if (cond)
-                        // so if k=1 (true), skip if (cond != 1) -> if (not cond) (assuming bool)
-
-                        // For TEST: if (not R[A] == k) skip.
-                        // k=0: if (not R[A] == 0) -> if (R[A]). Skip if true.
-                        // k=1: if (not R[A] == 1) -> if (not R[A]). Skip if false.
-
-                        // So generally:
-                        // k=0 => "then" (positive check)
-                        // k=1 => "not ... then" (negative check, or inverted logic)
-
-                        // Wait, for OP_EQ, k=1 means we skip if EQUAL.
-                        // "if (a==b) then".
-                        // Wait. `if ((a==b) ~= k)`.
-                        // If k=1. `(a==b) ~= 1`.
-                        // If a==b is true (1). `1 ~= 1` is False. Don't skip. JMP to else.
-                        // So if k=1, we skip on FALSE?
-                        // No.
-                        // Let's re-read: `OP_EQ A B k`: `if ((R[A] == R[B]) ~= k) then pc++`.
-                        // If k=1.
-                        // If R[A] == R[B]. Then (true ~= 1) is (1 ~= 1) is False. No skip.
-                        // So if Equal, we jump to Else.
-                        // If Not Equal. Then (false ~= 1) is (0 ~= 1) is True. Skip.
-                        // So k=1 means "Skip if Not Equal".
-                        // So "Then" block is executed if Not Equal.
-                        // So `if (a ~= b) then`.
-
-                        // If k=0.
-                        // If R[A] == R[B]. Then (true ~= 0) is (1 ~= 0) is True. Skip.
-                        // So "Then" block is executed if Equal.
-                        // So `if (a == b) then`.
-
-                        // So k=0 means `if (cond)`.
-                        // k=1 means `if not (cond)`.
-
-                        if (op == OP_TEST || op == OP_TESTSET) {
-                             if (k) printf(" is false then"); // k=1 -> skip if false -> if R[A] is false
-                             else printf(" is true then"); // k=0 -> skip if true -> if R[A] is true
-                        } else {
-                             if (k) printf(" is false then"); // k=1 -> skip if false -> if (cond) is false -> if not (cond)
-                             else printf(" is true then"); // k=0 -> skip if true -> if (cond) is true
-                        }
+                        printf(" then");
 
                         indent++;
                         bs_push(&bs, dest, 0);
