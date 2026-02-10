@@ -26,6 +26,7 @@ on:
         options:
           - '5.5'
           - '5.3'
+          - '5.3.3'
           - '5.2'
 
 jobs:
@@ -86,6 +87,7 @@ jobs:
         path: |
           lua_source
           lua53_source
+          lua533_source
           lua52_source
         key: lua-source-v2-${{ runner.os }}-${{ env.ALCC_TARGET_ARCH }}-${{ env.LUA_VER }}
 
@@ -99,6 +101,12 @@ jobs:
            git clone https://github.com/lua/lua.git $LUA_SRC_DIR
            cd $LUA_SRC_DIR
            git checkout v5.3.6
+        elif [ "$LUA_VER" = "5.3.3" ]; then
+           LUA_SRC_DIR="lua533_source"
+           rm -rf $LUA_SRC_DIR
+           git clone https://github.com/lua/lua.git $LUA_SRC_DIR
+           cd $LUA_SRC_DIR
+           git checkout v5.3.3
         elif [ "$LUA_VER" = "5.2" ]; then
            LUA_SRC_DIR="lua52_source"
            rm -rf $LUA_SRC_DIR
@@ -124,7 +132,7 @@ jobs:
            AR="$NDK_TOOLCHAIN/llvm-ar rcu"
            RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
            # Use posix to avoid readline for Android
-           if [ "$LUA_VER" = "5.3" ] || [ "$LUA_VER" = "5.2" ]; then
+           if [ "$LUA_VER" = "5.3" ] || [ "$LUA_VER" = "5.3.3" ] || [ "$LUA_VER" = "5.2" ]; then
               make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_COMPAT_5_2" MYLIBS=""
            else
               make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
@@ -140,6 +148,8 @@ jobs:
         LUA_MAKE_TARGET="all"
         if [ "$LUA_VER" = "5.3" ]; then
            LUA_SRC_DIR="lua53_source"
+        elif [ "$LUA_VER" = "5.3.3" ]; then
+           LUA_SRC_DIR="lua533_source"
         elif [ "$LUA_VER" = "5.2" ]; then
            LUA_SRC_DIR="lua52_source"
         fi
@@ -157,7 +167,7 @@ jobs:
              CC="$NDK_TOOLCHAIN/aarch64-linux-android24-clang"
              AR="$NDK_TOOLCHAIN/llvm-ar rcu"
              RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
-             if [ "$LUA_VER" = "5.3" ] || [ "$LUA_VER" = "5.2" ]; then
+             if [ "$LUA_VER" = "5.3" ] || [ "$LUA_VER" = "5.3.3" ] || [ "$LUA_VER" = "5.2" ]; then
                 make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_COMPAT_5_2" MYLIBS=""
              else
                 make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
@@ -185,6 +195,7 @@ jobs:
         mkdir -p release
         SUFFIX=""
         if [ "$LUA_VER" = "5.3" ]; then SUFFIX="-5.3"; fi
+        if [ "$LUA_VER" = "5.3.3" ]; then SUFFIX="-5.3.3"; fi
         if [ "$LUA_VER" = "5.2" ]; then SUFFIX="-5.2"; fi
         cp ALCC/alcc$SUFFIX ALCC/alcc-c$SUFFIX ALCC/alcc-d$SUFFIX ALCC/alcc-a$SUFFIX ALCC/alcc-dec$SUFFIX release/
         tar -czvf alcc-linux-${{ env.ALCC_TARGET_ARCH }}$SUFFIX.tar.gz -C release .
@@ -192,14 +203,14 @@ jobs:
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}
-        path: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}.tar.gz
+        name: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.3.3' && '-5.3.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}
+        path: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.3.3' && '-5.3.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}.tar.gz
 
     - name: Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}.tar.gz
+        files: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.3.3' && '-5.3.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}.tar.gz
         fail_on_unmatched_files: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

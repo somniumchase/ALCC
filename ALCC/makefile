@@ -1,7 +1,17 @@
 CXX=g++
 LUA_VER ?= 5.5
 
-ifeq ($(LUA_VER), 5.3)
+ifeq ($(LUA_VER), 5.3.3)
+  CXXFLAGS=-O2 -Wall -I../lua533_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_53 -DLUA_COMPAT_5_2
+  READLINE_LIBS=-lreadline
+  ifdef NO_READLINE
+    READLINE_LIBS=
+  endif
+  LDFLAGS=-L../lua533_source -llua -lm -ldl $(READLINE_LIBS)
+  SUFFIX=-5.3.3
+  BACKEND_OBJ=src/backend/lua53.o
+  TOOL_SUFFIX=\"$(SUFFIX)\"
+else ifeq ($(LUA_VER), 5.3)
   CXXFLAGS=-O2 -Wall -I../lua53_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_53 -DLUA_COMPAT_5_2
   READLINE_LIBS=-lreadline
   ifdef NO_READLINE
