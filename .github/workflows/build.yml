@@ -18,6 +18,14 @@ on:
           - x86_64
           - aarch64
           - android-aarch64
+      lua_version:
+        description: 'Lua Version'
+        required: true
+        default: '5.5'
+        type: choice
+        options:
+          - '5.5'
+          - '5.3'
 
 jobs:
   build:
@@ -26,6 +34,7 @@ jobs:
       contents: write
     env:
       ALCC_TARGET_ARCH: ${{ inputs.target_arch || 'x86_64' }}
+      LUA_VER: ${{ inputs.lua_version || '5.5' }}
 
     steps:
     - uses: actions/checkout@v3
@@ -73,45 +82,71 @@ jobs:
       id: cache-lua
       uses: actions/cache@v3
       with:
-        path: lua_source
-        key: lua-source-v1-${{ runner.os }}-${{ env.ALCC_TARGET_ARCH }}
+        path: |
+          lua_source
+          lua53_source
+        key: lua-source-v2-${{ runner.os }}-${{ env.ALCC_TARGET_ARCH }}-${{ env.LUA_VER }}
 
     - name: Setup Lua
       if: steps.cache-lua.outputs.cache-hit != 'true'
       run: |
-        rm -rf lua_source
-        git clone https://github.com/lua/lua.git lua_source
-        cd lua_source
+        LUA_SRC_DIR="lua_source"
+        if [ "$LUA_VER" = "5.3" ]; then
+           LUA_SRC_DIR="lua53_source"
+           rm -rf $LUA_SRC_DIR
+           git clone https://github.com/lua/lua.git $LUA_SRC_DIR
+           cd $LUA_SRC_DIR
+           git checkout v5.3.6
+        else
+           rm -rf $LUA_SRC_DIR
+           git clone https://github.com/lua/lua.git $LUA_SRC_DIR
+           cd $LUA_SRC_DIR
+        fi
+
         sed -i 's/-march=native//g' makefile
+        LUA_MAKE_TARGET="all"
+        if [ "$LUA_VER" = "5.3" ]; then
+           LUA_MAKE_TARGET="linux"
+        fi
+
         if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
-           make all CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
+           make $LUA_MAKE_TARGET CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
         elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
            NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
            CC="$NDK_TOOLCHAIN/aarch64-linux-android24-clang"
            AR="$NDK_TOOLCHAIN/llvm-ar rcu"
            RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
-           # Use posix to avoid readline, but enable dlopen and standard Lua libs
-           make all CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
+           # Use posix to avoid readline for Android
+           if [ "$LUA_VER" = "5.3" ]; then LUA_MAKE_TARGET="posix"; fi
+           make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
         else
-           make all CC="ccache gcc"
+           make $LUA_MAKE_TARGET CC="ccache gcc"
         fi
 
     - name: Ensure Lua Built (if cached)
       if: steps.cache-lua.outputs.cache-hit == 'true'
       run: |
-        cd lua_source
+        LUA_SRC_DIR="lua_source"
+        LUA_MAKE_TARGET="all"
+        if [ "$LUA_VER" = "5.3" ]; then
+           LUA_SRC_DIR="lua53_source"
+           LUA_MAKE_TARGET="linux"
+        fi
+        cd $LUA_SRC_DIR
+
         sed -i 's/-march=native//g' makefile
         if [ ! -f "liblua.a" ]; then
            if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
-             make all CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
+             make $LUA_MAKE_TARGET CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
            elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
              NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
              CC="$NDK_TOOLCHAIN/aarch64-linux-android24-clang"
              AR="$NDK_TOOLCHAIN/llvm-ar rcu"
              RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
-             make all CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
+             if [ "$LUA_VER" = "5.3" ]; then LUA_MAKE_TARGET="posix"; fi
+             make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
            else
-             make all CC="ccache gcc"
+             make $LUA_MAKE_TARGET CC="ccache gcc"
            fi
         fi
 
@@ -119,32 +154,34 @@ jobs:
       run: |
         cd ALCC
         if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
-           make CXX="ccache aarch64-linux-gnu-g++"
+           make CXX="ccache aarch64-linux-gnu-g++" LUA_VER=${{ env.LUA_VER }}
         elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
            NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
            CXX="$NDK_TOOLCHAIN/aarch64-linux-android24-clang++"
-           make CXX="ccache $CXX"
+           make CXX="ccache $CXX" LUA_VER=${{ env.LUA_VER }}
         else
-           make CXX="ccache g++"
+           make CXX="ccache g++" LUA_VER=${{ env.LUA_VER }}
         fi
 
     - name: Prepare Release Artifacts
       run: |
         mkdir -p release
-        cp ALCC/alcc ALCC/alcc-c ALCC/alcc-d ALCC/alcc-a ALCC/alcc-dec release/
-        tar -czvf alcc-linux-${{ env.ALCC_TARGET_ARCH }}.tar.gz -C release .
+        SUFFIX=""
+        if [ "$LUA_VER" = "5.3" ]; then SUFFIX="-5.3"; fi
+        cp ALCC/alcc$SUFFIX ALCC/alcc-c$SUFFIX ALCC/alcc-d$SUFFIX ALCC/alcc-a$SUFFIX ALCC/alcc-dec$SUFFIX release/
+        tar -czvf alcc-linux-${{ env.ALCC_TARGET_ARCH }}$SUFFIX.tar.gz -C release .
 
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: alcc-linux-${{ env.ALCC_TARGET_ARCH }}
-        path: alcc-linux-${{ env.ALCC_TARGET_ARCH }}.tar.gz
+        name: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}
+        path: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}.tar.gz
 
     - name: Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: alcc-linux-${{ env.ALCC_TARGET_ARCH }}.tar.gz
+        files: alcc-linux-${{ env.ALCC_TARGET_ARCH }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}.tar.gz
         fail_on_unmatched_files: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -17,6 +17,7 @@ extern "C" {
 }
 
 #include "../core/alcc_utils.h"
+#include "../core/compat.h"
 #include "../core/alcc_backend.h"
 
 #define MAX_LABELS 1000
@@ -87,7 +88,7 @@ static int bs_check_end(BlockStack* bs, int pc, Proto* p) {
             if (pc > 0) {
                  Instruction prev = p->code[pc-1];
                  if (GET_OPCODE(prev) == OP_JMP) {
-                     int sJ = GETARG_sJ(prev);
+                     int sJ = ALCC_GET_JMP_OFFSET(prev);
                      int target = pc + sJ;
                      if (bs->blocks[bs->top-1].type == BLOCK_IF && target > pc) {
                          bs->blocks[bs->top-1].target_pc = target;
@@ -237,7 +238,7 @@ struct DecompilerContext {
         if (ttisinteger(val)) return new Literal((double)ivalue(val));
         if (ttisnumber(val)) return new Literal(fltvalue(val));
         if (ttisnil(val)) return new Literal();
-        if (ttisboolean(val)) return new Literal(ttistrue(val));
+        if (ttisboolean(val)) return new Literal((bool)ttistrue(val));
         return new Literal("?");
     }
 
@@ -303,8 +304,8 @@ static void set_proto_printed(Proto* p) {
 
 // Helpers
 static void process_arithmetic(DecompilerContext& ctx, int pc, int op, int a, int b, int c, bool is_k) {
-    Expression* left = ctx.get_expr(b, pc);
-    Expression* right = is_k ? ctx.make_const(c) : ctx.get_expr(c, pc);
+    Expression* left = ISK(b) ? ctx.make_const(INDEXK(b)) : ctx.get_expr(b, pc);
+    Expression* right = (is_k || ISK(c)) ? ctx.make_const(INDEXK(c)) : ctx.get_expr(c, pc);
     std::string op_str = "?";
     switch(op) {
         case OP_ADD: op_str = "+"; break;
@@ -475,12 +476,19 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                 break;
             }
             case OP_GETTABUP: {
-                Expression* key = ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : ctx.make_const(c);
+                Expression* key;
+                #ifdef LUA_53
+                if (ISK(c)) key = ctx.make_const(INDEXK(c));
+                else key = ctx.get_expr(c, i);
+                #else
+                key = ttisstring(&p->k[c]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[c])))) : ctx.make_const(c);
+                #endif
                 ctx.set_expr(a, new BinaryExpr(ctx.make_upval(b), "[", key));
                 break;
             }
             case OP_GETTABLE: {
-                ctx.set_expr(a, new BinaryExpr(ctx.get_expr(b, i), "[", ctx.get_expr(c, i)));
+                Expression* key = ISK(c) ? ctx.make_const(INDEXK(c)) : ctx.get_expr(c, i);
+                ctx.set_expr(a, new BinaryExpr(ctx.get_expr(b, i), "[", key));
                 break;
             }
             case OP_GETI: {
@@ -493,17 +501,26 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                 break;
             }
             case OP_SETTABUP: {
-                Expression* key = ttisstring(&p->k[b]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[b])))) : ctx.make_const(b);
+                Expression* key;
+                #ifdef LUA_53
+                if (ISK(b)) key = ctx.make_const(INDEXK(b));
+                else key = ctx.get_expr(b, i);
+                Expression* val = ISK(c) ? ctx.make_const(INDEXK(c)) : ctx.get_expr(c, i);
+                #else
+                key = ttisstring(&p->k[b]) ? (Expression*)new Literal(std::string(getstr(tsvalue(&p->k[b])))) : ctx.make_const(b);
+                Expression* val = ctx.get_expr(c, i);
+                #endif
                 Assignment* assign = new Assignment(false);
                 assign->targets.push_back(new BinaryExpr(ctx.make_upval(a), "[", key));
-                assign->values.push_back(ctx.get_expr(c, i));
+                assign->values.push_back(val);
                 ctx.current_block->add(assign);
                 break;
             }
             case OP_SETTABLE: {
                 Assignment* assign = new Assignment(false);
-                assign->targets.push_back(new BinaryExpr(ctx.get_expr(a, i), "[", ctx.get_expr(b, i)));
-                assign->values.push_back(k ? ctx.make_const(c) : ctx.get_expr(c, i));
+                Expression* key = ISK(b) ? ctx.make_const(INDEXK(b)) : ctx.get_expr(b, i);
+                assign->targets.push_back(new BinaryExpr(ctx.get_expr(a, i), "[", key));
+                assign->values.push_back((k || ISK(c)) ? ctx.make_const(INDEXK(c)) : ctx.get_expr(c, i));
                 ctx.current_block->add(assign);
                 break;
             }
@@ -725,22 +742,36 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                         }
                         bool is_repeat = (dest <= i);
                         Expression* cond = nullptr;
-                        Expression* lhs = ctx.get_expr(a, i); // Should work even if flushed above as it returns var
+                        Expression* lhs = nullptr;
                         Expression* rhs = nullptr;
                         std::string op_str = "==";
+                        int cond_inv = k;
+
+                        #ifdef LUA_53
+                        if (op == OP_TEST || op == OP_TESTSET) {
+                            lhs = ctx.get_expr(a, i);
+                            cond_inv = c; // OP_TEST A C
+                        } else {
+                            lhs = ISK(b) ? ctx.make_const(INDEXK(b)) : ctx.get_expr(b, i);
+                            rhs = ISK(c) ? ctx.make_const(INDEXK(c)) : ctx.get_expr(c, i);
+                            cond_inv = a; // OP_EQ A B C
+                        }
+                        #else
+                        lhs = ctx.get_expr(a, i);
+                        if (op == OP_EQ || op == OP_LT || op == OP_LE) rhs = ctx.get_expr(b, i);
+                        else if (op == OP_EQK) rhs = ctx.make_const(b);
+                        else if (op != OP_TEST && op != OP_TESTSET) rhs = new Literal((double)(b - OFFSET_sC));
+                        #endif
+
                         if (op == OP_TEST || op == OP_TESTSET) {
                             cond = lhs;
-                            if (k) cond = new UnaryExpr("not", cond);
+                            if (cond_inv) cond = new UnaryExpr("not", cond);
                         } else {
-                            if (op == OP_EQ || op == OP_LT || op == OP_LE) rhs = ctx.get_expr(b, i);
-                            else if (op == OP_EQK) rhs = ctx.make_const(b);
-                            else rhs = new Literal((double)(b - OFFSET_sC));
-
-                            if (op == OP_EQ || op == OP_EQK || op == OP_EQI) op_str = k ? "~=" : "==";
-                            else if (op == OP_LT || op == OP_LTI) op_str = k ? ">=" : "<";
-                            else if (op == OP_LE || op == OP_LEI) op_str = k ? ">" : "<=";
-                            else if (op == OP_GTI) op_str = k ? "<=" : ">";
-                            else if (op == OP_GEI) op_str = k ? "<" : ">=";
+                            if (op == OP_EQ || op == OP_EQK || op == OP_EQI) op_str = cond_inv ? "~=" : "==";
+                            else if (op == OP_LT || op == OP_LTI) op_str = cond_inv ? ">=" : "<";
+                            else if (op == OP_LE || op == OP_LEI) op_str = cond_inv ? ">" : "<=";
+                            else if (op == OP_GTI) op_str = cond_inv ? "<=" : ">";
+                            else if (op == OP_GEI) op_str = cond_inv ? "<" : ">=";
                             cond = new BinaryExpr(lhs, op_str, rhs);
                         }
 

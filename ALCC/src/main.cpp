@@ -103,21 +103,25 @@ int main(int argc, char* argv[]) {
 
         std::string output_path = get_input("Enter output file path: ");
 
+#ifndef TOOL_SUFFIX
+#define TOOL_SUFFIX ""
+#endif
+
         switch (choice) {
             case 1: // Compile: alcc-c input -o output
-                tool_path = fs::path(base_dir) / "alcc-c";
+                tool_path = fs::path(base_dir) / ("alcc-c" TOOL_SUFFIX);
                 cmd = "\"" + tool_path.string() + "\" \"" + input_path + "\" -o \"" + output_path + "\"";
                 break;
             case 2: // Disassemble: alcc-d input > output
-                tool_path = fs::path(base_dir) / "alcc-d";
+                tool_path = fs::path(base_dir) / ("alcc-d" TOOL_SUFFIX);
                 cmd = "\"" + tool_path.string() + "\" \"" + input_path + "\" -t " + current_template + " > \"" + output_path + "\"";
                 break;
             case 3: // Assemble: alcc-a input -o output
-                tool_path = fs::path(base_dir) / "alcc-a";
+                tool_path = fs::path(base_dir) / ("alcc-a" TOOL_SUFFIX);
                 cmd = "\"" + tool_path.string() + "\" \"" + input_path + "\" -o \"" + output_path + "\" -t " + current_template;
                 break;
             case 4: // Decompile: alcc-dec input > output
-                tool_path = fs::path(base_dir) / "alcc-dec";
+                tool_path = fs::path(base_dir) / ("alcc-dec" TOOL_SUFFIX);
                 cmd = "\"" + tool_path.string() + "\" \"" + input_path + "\" -t " + current_template + " > \"" + output_path + "\"";
                 break;
         }
