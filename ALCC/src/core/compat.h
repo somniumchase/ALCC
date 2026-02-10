@@ -1,8 +1,8 @@
 #ifndef ALCC_COMPAT_H
 #define ALCC_COMPAT_H
 
-#ifdef LUA_53
-  // Lua 5.3 compatibility
+#if defined(LUA_53) || defined(LUA_52)
+  // Lua 5.3 and 5.2 compatibility
   #define s2v(o) (o)
   #define setclLvalue2s(L, o, cl) setclLvalue(L, o, cl)
   #define ALCC_TOP(L) (L->top)
@@ -23,6 +23,34 @@
   #define OP_ADDI -12
   #define OP_GETFIELD -13
   #define OP_SETFIELD -14
+
+  #ifdef LUA_52
+    // Missing 5.3 opcodes in 5.2
+    #define OP_IDIV -15
+    #define OP_BAND -16
+    #define OP_BOR -17
+    #define OP_BXOR -18
+    #define OP_SHL -19
+    #define OP_SHR -20
+    #define OP_BNOT -21
+
+    // Lua 5.2 number handling (only doubles)
+    #define ttisinteger(o) 0
+    #define ivalue(o) ((lua_Integer)nvalue(o))
+    #define fltvalue(o) nvalue(o)
+    #define setfltvalue(obj, x) setnvalue(obj, x)
+    #define setivalue(obj, x) setnvalue(obj, x)
+    #define tsslen(s) (((TString*)(s))->tsv.len)
+
+    #define ALCC_LCLOSURE_T Closure
+    #define ALCC_NEW_LCLOSURE(L, n) luaF_newLclosure(L, n)
+    #define ALCC_SET_CL_PROTO(cl, proto) ((cl)->l.p = (proto))
+  #else
+    // Lua 5.3
+    #define ALCC_LCLOSURE_T LClosure
+    #define ALCC_NEW_LCLOSURE(L, n) luaF_newLclosure(L, n)
+    #define ALCC_SET_CL_PROTO(cl, proto) ((cl)->p = (proto))
+  #endif
 
   #define OFFSET_sC 0
 
@@ -58,6 +86,16 @@
   // 5.4+ does not have RK
   #define ISK(x) 0
   #define INDEXK(x) (x)
+
+  #define ALCC_LCLOSURE_T LClosure
+  #define ALCC_NEW_LCLOSURE(L, n) luaF_newLclosure(L, n)
+  #define ALCC_SET_CL_PROTO(cl, proto) ((cl)->p = (proto))
+#endif
+
+#ifdef LUA_52
+  #define ALCC_LUA_DUMP(L, w, d, s) lua_dump(L, w, d)
+#else
+  #define ALCC_LUA_DUMP(L, w, d, s) lua_dump(L, w, d, s)
 #endif
 
 #endif

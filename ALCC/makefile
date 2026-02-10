@@ -11,6 +11,16 @@ ifeq ($(LUA_VER), 5.3)
   SUFFIX=-5.3
   BACKEND_OBJ=src/backend/lua53.o
   TOOL_SUFFIX=\"$(SUFFIX)\"
+else ifeq ($(LUA_VER), 5.2)
+  CXXFLAGS=-O2 -Wall -I../lua52_source/src -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_52
+  READLINE_LIBS=-lreadline
+  ifdef NO_READLINE
+    READLINE_LIBS=
+  endif
+  LDFLAGS=-L../lua52_source/src -llua -lm -ldl $(READLINE_LIBS)
+  SUFFIX=-5.2
+  BACKEND_OBJ=src/backend/lua52.o
+  TOOL_SUFFIX=\"$(SUFFIX)\"
 else
   CXXFLAGS=-O2 -Wall -I../lua_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function
   LDFLAGS=-L../lua_source -llua -lm -ldl
@@ -35,6 +45,9 @@ src/backend/lua55.o: src/backend/lua55.cpp src/core/alcc_backend.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 src/backend/lua53.o: src/backend/lua53.cpp src/core/alcc_backend.h
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+src/backend/lua52.o: src/backend/lua52.cpp src/core/alcc_backend.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 src/templates/TemplateFactory.o: src/templates/TemplateFactory.cpp src/templates/TemplateFactory.h

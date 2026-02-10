@@ -6,7 +6,7 @@ extern "C" {
 #include "lua.h"
 #include "lobject.h"
 #include "lopcodes.h"
-#ifndef LUA_53
+#if !defined(LUA_53) && !defined(LUA_52)
 #include "lopnames.h"
 #endif
 }
