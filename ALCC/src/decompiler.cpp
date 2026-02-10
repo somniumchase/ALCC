@@ -14,6 +14,7 @@ extern "C" {
 #include "lstring.h"
 }
 #include "alcc_utils.h"
+#include "core/compat.h"
 #include "alcc_backend.h"
 #include "../plugin/alcc_plugin.h"
 #include "templates/TemplateFactory.h"
@@ -68,7 +69,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    StkId o = L->top.p - 1;
+    StkId o = ALCC_TOP(L) - 1;
     LClosure* cl_obj = clLvalue(s2v(o));
     Proto* p = cl_obj->p;
 

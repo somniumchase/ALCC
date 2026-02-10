@@ -6,7 +6,9 @@ extern "C" {
 #include "lua.h"
 #include "lobject.h"
 #include "lopcodes.h"
+#ifndef LUA_53
 #include "lopnames.h"
+#endif
 }
 #include "alcc_plugin.h"
 

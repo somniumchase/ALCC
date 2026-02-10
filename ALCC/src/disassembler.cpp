@@ -14,6 +14,7 @@ extern "C" {
 #include "lfunc.h"
 }
 #include "alcc_utils.h"
+#include "core/compat.h"
 #include "../plugin/alcc_plugin.h"
 #include "../templates/TemplateFactory.h"
 #include "../templates/DefaultTemplate.h"
@@ -105,7 +106,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    StkId o = L->top.p - 1;
+    StkId o = ALCC_TOP(L) - 1;
     if (!ttisLclosure(s2v(o))) {
         fprintf(stderr, "Not a Lua closure\n");
         return 1;

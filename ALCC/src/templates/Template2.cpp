@@ -1,4 +1,5 @@
 #include "Template2.h"
+#include "../core/compat.h"
 #include "DecompilerCore.h"
 #include <iostream>
 
@@ -93,7 +94,7 @@ void Template2::print_proto(Proto* p, int level, AlccPlugin* plugin) {
         printf("%*s  ", level*2, "");
         if (u->name) alcc_print_string(getstr(u->name), tsslen(u->name));
         else printf("\"\"");
-        printf(" %d %d %d\n", u->instack, u->idx, u->kind);
+        printf(" %d %d %d\n", u->instack, u->idx, ALCC_UPVAL_KIND_GET(u));
     }
 
     // Args
@@ -175,7 +176,7 @@ Proto* Template2::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
             sscanf(after_name, "%d %d %d", &instack, &idx, &kind);
             p->upvalues[i].instack = (lu_byte)instack;
             p->upvalues[i].idx = (lu_byte)idx;
-            p->upvalues[i].kind = (lu_byte)kind;
+            ALCC_UPVAL_KIND_SET(&p->upvalues[i], (lu_byte)kind);
         }
     }
 
@@ -186,7 +187,7 @@ Proto* Template2::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
     sscanf(line, "..args %d %d %d", &numparams, &is_vararg, &maxstacksize);
     p->numparams = (lu_byte)numparams;
     p->maxstacksize = (lu_byte)maxstacksize;
-    p->flag |= (lu_byte)is_vararg;
+    ALCC_SET_VARARG(p, (lu_byte)is_vararg);
 
     // Constants
     line = find_line_starting_with(ctx, plugin, "..consts");

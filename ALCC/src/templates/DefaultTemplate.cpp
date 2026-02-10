@@ -1,4 +1,5 @@
 #include "DefaultTemplate.h"
+#include "../core/compat.h"
 #include "DecompilerCore.h"
 #include <iostream>
 #include <string.h>
@@ -263,7 +264,7 @@ void DefaultTemplate::print_proto(Proto* p, int level, AlccPlugin* plugin) {
         printf("%*s  [%d] ", level*2, "", i);
         if (u->name) alcc_print_string(getstr(u->name), tsslen(u->name));
         else printf("(no name)");
-        printf(" %d %d %d\n", u->instack, u->idx, u->kind);
+        printf(" %d %d %d\n", u->instack, u->idx, ALCC_UPVAL_KIND_GET(u));
     }
 
     printf("%*s; Constants (%d):\n", level*2, "", p->sizek);
@@ -307,7 +308,7 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
     }
     p->numparams = (lu_byte)numparams;
     p->maxstacksize = (lu_byte)maxstacksize;
-    p->flag |= (lu_byte)is_vararg;
+    ALCC_SET_VARARG(p, (lu_byte)is_vararg);
 
     // Upvalues
     line = find_line_starting_with(ctx, plugin, "; Upvalues");
@@ -322,7 +323,7 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
              p->upvalues[i].name = NULL;
              p->upvalues[i].instack = 0;
              p->upvalues[i].idx = 0;
-             p->upvalues[i].kind = 0;
+             ALCC_UPVAL_KIND_SET(&p->upvalues[i], 0);
         }
 
         for (int i=0; i<nup; i++) {
@@ -351,7 +352,7 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
             sscanf(after_name, "%d %d %d", &instack, &idx, &kind);
             p->upvalues[i].instack = (lu_byte)instack;
             p->upvalues[i].idx = (lu_byte)idx;
-            p->upvalues[i].kind = (lu_byte)kind;
+            ALCC_UPVAL_KIND_SET(&p->upvalues[i], (lu_byte)kind);
         }
     }
 

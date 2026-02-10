@@ -1,9 +1,22 @@
 CXX=g++
-CXXFLAGS=-O2 -Wall -I../lua_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function
-LDFLAGS=-L../lua_source -llua -lm -ldl
+LUA_VER ?= 5.5
 
-ALL_TOOLS=alcc-c alcc-d alcc-a alcc-dec alcc
-CORE_OBJ=src/core/alcc_utils.o src/backend/lua55.o
+ifeq ($(LUA_VER), 5.3)
+  CXXFLAGS=-O2 -Wall -I../lua53_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_53 -DLUA_COMPAT_5_2
+  LDFLAGS=-L../lua53_source -llua -lm -ldl -lreadline
+  SUFFIX=-5.3
+  BACKEND_OBJ=src/backend/lua53.o
+  TOOL_SUFFIX=\"$(SUFFIX)\"
+else
+  CXXFLAGS=-O2 -Wall -I../lua_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function
+  LDFLAGS=-L../lua_source -llua -lm -ldl
+  SUFFIX=
+  BACKEND_OBJ=src/backend/lua55.o
+  TOOL_SUFFIX=\"\"
+endif
+
+ALL_TOOLS=alcc-c$(SUFFIX) alcc-d$(SUFFIX) alcc-a$(SUFFIX) alcc-dec$(SUFFIX) alcc$(SUFFIX)
+CORE_OBJ=src/core/alcc_utils.o $(BACKEND_OBJ)
 AST_OBJ=src/ast/AST.o src/ast/ASTPrinter.o
 TEMPLATE_OBJ=src/templates/TemplateFactory.o src/templates/DefaultTemplate.o src/templates/Template2.o src/templates/DecompilerCore.o $(AST_OBJ)
 PLUGIN_SRC=plugins/sample_plugin.cpp
@@ -15,6 +28,9 @@ src/core/alcc_utils.o: src/core/alcc_utils.cpp src/core/alcc_utils.h src/core/al
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 src/backend/lua55.o: src/backend/lua55.cpp src/core/alcc_backend.h
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+src/backend/lua53.o: src/backend/lua53.cpp src/core/alcc_backend.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 src/templates/TemplateFactory.o: src/templates/TemplateFactory.cpp src/templates/TemplateFactory.h
@@ -35,23 +51,23 @@ src/ast/AST.o: src/ast/AST.cpp src/ast/AST.h
 src/ast/ASTPrinter.o: src/ast/ASTPrinter.cpp src/ast/ASTPrinter.h src/ast/AST.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-alcc-c: src/compiler.cpp $(CORE_OBJ)
+alcc-c$(SUFFIX): src/compiler.cpp $(CORE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-alcc-d: src/disassembler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
+alcc-d$(SUFFIX): src/disassembler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-alcc-a: src/assembler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
+alcc-a$(SUFFIX): src/assembler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-alcc-dec: src/decompiler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
+alcc-dec$(SUFFIX): src/decompiler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-alcc: src/main.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $<
+alcc$(SUFFIX): src/main.cpp
+	$(CXX) $(CXXFLAGS) -DTOOL_SUFFIX=$(TOOL_SUFFIX) -o $@ $<
 
 $(PLUGIN_SO): $(PLUGIN_SRC)
 	$(CXX) $(CXXFLAGS) -fPIC -shared -o $@ $< $(LDFLAGS)
 
 clean:
-	rm -f $(ALL_TOOLS) src/core/*.o src/backend/*.o src/templates/*.o plugins/*.so
+	rm -f $(ALL_TOOLS) src/core/*.o src/backend/*.o src/templates/*.o src/ast/*.o plugins/*.so alcc-* alcc

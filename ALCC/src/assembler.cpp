@@ -14,6 +14,7 @@ extern "C" {
 #include "lstring.h"
 }
 #include "alcc_utils.h"
+#include "core/compat.h"
 #include "../plugin/alcc_plugin.h"
 #include "../templates/TemplateFactory.h"
 #include "../templates/DefaultTemplate.h"
@@ -108,8 +109,8 @@ int main(int argc, char** argv) {
     LClosure* cl = luaF_newLclosure(L, 1);
     cl->p = p;
 
-    setclLvalue2s(L, L->top.p, cl);
-    L->top.p++;
+    setclLvalue2s(L, ALCC_TOP(L), cl);
+    ALCC_TOP(L)++;
 
     FILE* fout = fopen(output_file, "wb");
     if (!fout) {
