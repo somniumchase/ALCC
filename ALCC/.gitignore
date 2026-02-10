@@ -3,6 +3,7 @@ alcc-d
 alcc-a
 alcc-dec
 alcc
+alcc-*-5.3.3
 *.o
 *.so
 *.luac
@@ -10,6 +11,9 @@ alcc
 *.dec.lua
 *.log
 output.txt
+complex_output.txt
 test_clean.asm
 test_new_clean.asm
 test_plugin.asm
+test.lua
+test_error.asm

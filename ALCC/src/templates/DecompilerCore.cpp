@@ -614,6 +614,9 @@ ASTNode* DecompilerCore::build_ast(Proto* p, AlccPlugin* plugin) {
                 }
                 break;
             }
+#ifdef ANDROLUA
+            case OP_NEWARRAY:
+#endif
             case OP_NEWTABLE: {
                 TableConstructor* tc = new TableConstructor();
                 Assignment* assign = new Assignment(false);

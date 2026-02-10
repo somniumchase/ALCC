@@ -11,6 +11,16 @@ ifeq ($(LUA_VER), 5.3)
   SUFFIX=-5.3
   BACKEND_OBJ=src/backend/lua53.o
   TOOL_SUFFIX=\"$(SUFFIX)\"
+else ifeq ($(LUA_VER), 5.3.3)
+  CXXFLAGS=-O2 -Wall -I../androlua533_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_53 -DLUA_COMPAT_5_2 -DANDROLUA
+  READLINE_LIBS=-lreadline
+  ifdef NO_READLINE
+    READLINE_LIBS=
+  endif
+  LDFLAGS=-L../androlua533_source -llua -lm -ldl $(READLINE_LIBS)
+  SUFFIX=-5.3.3
+  BACKEND_OBJ=src/backend/androlua533.o
+  TOOL_SUFFIX=\"$(SUFFIX)\"
 else ifeq ($(LUA_VER), 5.2)
   CXXFLAGS=-O2 -Wall -I../lua52_source/src -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_52
   READLINE_LIBS=-lreadline
@@ -45,6 +55,9 @@ src/backend/lua55.o: src/backend/lua55.cpp src/core/alcc_backend.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 src/backend/lua53.o: src/backend/lua53.cpp src/core/alcc_backend.h
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+src/backend/androlua533.o: src/backend/lua53.cpp src/core/alcc_backend.h
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 src/backend/lua52.o: src/backend/lua52.cpp src/core/alcc_backend.h

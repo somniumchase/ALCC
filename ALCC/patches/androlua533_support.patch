@@ -1,0 +1,28 @@
+diff --git a/lmathlib.c b/lmathlib.c
+index 8442135..b5a9f28 100644
+--- a/lmathlib.c
++++ b/lmathlib.c
+@@ -12,6 +12,7 @@
+
+ #include <stdlib.h>
+ #include <math.h>
++#include <float.h>
+ #include <time.h>
+
+ #include "lua.h"
+diff --git a/lutf8lib.c b/lutf8lib.c
+index 77635d0..1f50e93 100644
+--- a/lutf8lib.c
++++ b/lutf8lib.c
+@@ -1,8 +1,8 @@
+ /* vim: set ft=c nu et sw=2 fdc=2 fdm=syntax : */
+ #define LUA_LIB
+-#include <lua.h>
+-#include <lauxlib.h>
+-#include <lualib.h>
++#include "lua.h"
++#include "lauxlib.h"
++#include "lualib.h"
+
+
+ #include <assert.h>
