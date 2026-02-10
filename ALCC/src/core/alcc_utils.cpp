@@ -7,6 +7,9 @@
 #ifdef LUA_53
 extern AlccBackend alcc_lua53_backend;
 AlccBackend* current_backend = &alcc_lua53_backend;
+#elif defined(LUA_52)
+extern AlccBackend alcc_lua52_backend;
+AlccBackend* current_backend = &alcc_lua52_backend;
 #else
 extern AlccBackend alcc_lua55_backend;
 AlccBackend* current_backend = &alcc_lua55_backend;

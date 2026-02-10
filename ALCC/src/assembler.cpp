@@ -106,8 +106,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    LClosure* cl = luaF_newLclosure(L, 1);
-    cl->p = p;
+    ALCC_LCLOSURE_T* cl = ALCC_NEW_LCLOSURE(L, 1);
+    ALCC_SET_CL_PROTO(cl, p);
 
     setclLvalue2s(L, ALCC_TOP(L), cl);
     ALCC_TOP(L)++;
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (lua_dump(L, alcc_writer, fout, 0) != 0) {
+    if (ALCC_LUA_DUMP(L, alcc_writer, fout, 0) != 0) {
         fprintf(stderr, "Error dumping chunk\n");
     }
 

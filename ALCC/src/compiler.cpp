@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "alcc_utils.h"
+#include "compat.h"
 
 int main(int argc, char** argv) {
     if (argc < 3) {
@@ -44,7 +45,7 @@ int main(int argc, char** argv) {
     }
 
     // strip=0 (keep debug info)
-    if (lua_dump(L, alcc_writer, f, 0) != 0) {
+    if (ALCC_LUA_DUMP(L, alcc_writer, f, 0) != 0) {
         fprintf(stderr, "Error dumping chunk\n");
         fclose(f);
         lua_close(L);
