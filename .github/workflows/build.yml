@@ -105,9 +105,6 @@ jobs:
 
         sed -i 's/-march=native//g' makefile
         LUA_MAKE_TARGET="all"
-        if [ "$LUA_VER" = "5.3" ]; then
-           LUA_MAKE_TARGET="linux"
-        fi
 
         if [ "$ALCC_TARGET_ARCH" = "aarch64" ]; then
            make $LUA_MAKE_TARGET CC="ccache aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar rcu" RANLIB=aarch64-linux-gnu-ranlib
@@ -117,8 +114,11 @@ jobs:
            AR="$NDK_TOOLCHAIN/llvm-ar rcu"
            RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
            # Use posix to avoid readline for Android
-           if [ "$LUA_VER" = "5.3" ]; then LUA_MAKE_TARGET="posix"; fi
-           make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
+           if [ "$LUA_VER" = "5.3" ]; then
+              make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_COMPAT_5_2" MYLIBS=""
+           else
+              make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
+           fi
         else
            make $LUA_MAKE_TARGET CC="ccache gcc"
         fi
@@ -130,7 +130,6 @@ jobs:
         LUA_MAKE_TARGET="all"
         if [ "$LUA_VER" = "5.3" ]; then
            LUA_SRC_DIR="lua53_source"
-           LUA_MAKE_TARGET="linux"
         fi
         cd $LUA_SRC_DIR
 
@@ -143,8 +142,11 @@ jobs:
              CC="$NDK_TOOLCHAIN/aarch64-linux-android24-clang"
              AR="$NDK_TOOLCHAIN/llvm-ar rcu"
              RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
-             if [ "$LUA_VER" = "5.3" ]; then LUA_MAKE_TARGET="posix"; fi
-             make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
+             if [ "$LUA_VER" = "5.3" ]; then
+                make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_COMPAT_5_2" MYLIBS=""
+             else
+                make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
+             fi
            else
              make $LUA_MAKE_TARGET CC="ccache gcc"
            fi
