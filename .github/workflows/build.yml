@@ -160,7 +160,7 @@ jobs:
         elif [ "$ALCC_TARGET_ARCH" = "android-aarch64" ]; then
            NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
            CXX="$NDK_TOOLCHAIN/aarch64-linux-android24-clang++"
-           make CXX="ccache $CXX" LUA_VER=${{ env.LUA_VER }}
+           make CXX="ccache $CXX" LUA_VER=${{ env.LUA_VER }} NO_READLINE=1
         else
            make CXX="ccache g++" LUA_VER=${{ env.LUA_VER }}
         fi
