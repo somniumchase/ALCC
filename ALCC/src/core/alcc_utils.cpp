@@ -53,24 +53,24 @@ static int hex_digit(char c) {
     return -1;
 }
 
-char* alcc_parse_string(char* s, char* buffer) {
+char* alcc_parse_string(char* s, std::string& buffer) {
+    buffer.clear();
     s = alcc_skip_space(s);
     if (*s != '"') return NULL;
     s++;
-    char* d = buffer;
     while (*s && *s != '"') {
         if (*s == '\\') {
             s++;
-            if (*s == 'a') *d++ = '\a';
-            else if (*s == 'b') *d++ = '\b';
-            else if (*s == 'f') *d++ = '\f';
-            else if (*s == 'n') *d++ = '\n';
-            else if (*s == 'r') *d++ = '\r';
-            else if (*s == 't') *d++ = '\t';
-            else if (*s == 'v') *d++ = '\v';
-            else if (*s == '\\') *d++ = '\\';
-            else if (*s == '"') *d++ = '"';
-            else if (*s == '\n') *d++ = '\n'; // escaped newline
+            if (*s == 'a') buffer.push_back('\a');
+            else if (*s == 'b') buffer.push_back('\b');
+            else if (*s == 'f') buffer.push_back('\f');
+            else if (*s == 'n') buffer.push_back('\n');
+            else if (*s == 'r') buffer.push_back('\r');
+            else if (*s == 't') buffer.push_back('\t');
+            else if (*s == 'v') buffer.push_back('\v');
+            else if (*s == '\\') buffer.push_back('\\');
+            else if (*s == '"') buffer.push_back('"');
+            else if (*s == '\n') buffer.push_back('\n'); // escaped newline
             else if (*s == 'z') { // skip whitespace
                 s++;
                 while (*s && isspace(*s)) s++;
@@ -81,7 +81,7 @@ char* alcc_parse_string(char* s, char* buffer) {
                 int h1 = hex_digit(s[0]);
                 int h2 = hex_digit(s[1]);
                 if (h1 >= 0 && h2 >= 0) {
-                    *d++ = (char)((h1 << 4) | h2);
+                    buffer.push_back((char)((h1 << 4) | h2));
                     s += 2;
                     continue;
                 }
@@ -95,18 +95,17 @@ char* alcc_parse_string(char* s, char* buffer) {
                     c++;
                 }
                 if (val > 255) val = 255; // clamp?
-                *d++ = (char)val;
+                buffer.push_back((char)val);
                 continue;
             }
             else {
-                *d++ = *s;
+                buffer.push_back(*s);
             }
         } else {
-            *d++ = *s;
+            buffer.push_back(*s);
         }
         s++;
     }
-    *d = '\0';
     if (*s == '"') s++;
     return s;
 }
