@@ -17,6 +17,12 @@ make
 ```
 Note: Requires `../lua_source` to be built (run `make` inside `lua_source`).
 
+## Building for Lua 5.4
+To build for Lua 5.4, ensure `../lua54_source` is available (and built).
+```bash
+make LUA_VER=5.4
+```
+
 ## Usage
 ### Compiler
 ```bash

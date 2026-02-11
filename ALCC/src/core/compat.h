@@ -73,10 +73,10 @@
 
 #else
   // Lua 5.4+ compatibility
-  #define ALCC_TOP(L) (L->top.p)
+  #define ALCC_TOP(L) (L->top)
 
-  // In 5.4+, p->flag holds is_vararg (bit 1)
-  #define ALCC_SET_VARARG(p, v) ((p)->flag |= (lu_byte)(v))
+  #define isvararg(p) ((p)->is_vararg)
+  #define ALCC_SET_VARARG(p, v) ((p)->is_vararg = (lu_byte)(v))
 
   #define ALCC_UPVAL_KIND_GET(u) ((u)->kind)
   #define ALCC_UPVAL_KIND_SET(u, k) ((u)->kind = (k))
