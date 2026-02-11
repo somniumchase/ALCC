@@ -331,21 +331,21 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
             char* s = strchr(ctx->buffer, ']');
             if (!s) continue;
             s++;
-            char namebuf[1024];
+            std::string namebuf;
             char* after_name;
 
             s = alcc_skip_space(s);
             if (*s == '"') {
                 after_name = alcc_parse_string(s, namebuf);
             } else {
-                strcpy(namebuf, "");
+                namebuf.clear();
                 after_name = strchr(s, ')');
                 if (after_name) after_name++;
                 else after_name = s;
             }
 
-            if (namebuf[0]) {
-                p->upvalues[i].name = luaS_new(L, namebuf);
+            if (!namebuf.empty()) {
+                p->upvalues[i].name = luaS_new(L, namebuf.c_str());
             }
 
             int instack=0, idx=0, kind=0;
@@ -375,9 +375,9 @@ Proto* DefaultTemplate::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin
             s = alcc_skip_space(s);
 
             if (*s == '"') {
-                char buf[4096];
+                std::string buf;
                 alcc_parse_string(s, buf);
-                setsvalue(L, &p->k[i], luaS_new(L, buf));
+                setsvalue(L, &p->k[i], luaS_new(L, buf.c_str()));
             } else if (strncmp(s, "nil", 3) == 0) {
                 setnilvalue(&p->k[i]);
             } else if (strncmp(s, "true", 4) == 0) {

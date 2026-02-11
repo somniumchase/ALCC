@@ -156,7 +156,7 @@ Proto* Template2::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
         for (int i=0; i<nup; i++) {
             if (!get_line(ctx, plugin)) parse_error(ctx, "Unexpected EOF while parsing upvalues");
             char* s = alcc_skip_space(ctx->buffer);
-            char namebuf[1024];
+            std::string namebuf;
             char* after_name;
 
             if (*s == '"') {
@@ -166,8 +166,8 @@ Proto* Template2::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
                 return NULL;
             }
 
-            if (namebuf[0]) {
-                p->upvalues[i].name = luaS_new(L, namebuf);
+            if (!namebuf.empty()) {
+                p->upvalues[i].name = luaS_new(L, namebuf.c_str());
             } else {
                 p->upvalues[i].name = NULL;
             }
@@ -204,9 +204,9 @@ Proto* Template2::assemble(lua_State* L, ParseCtx* ctx, AlccPlugin* plugin) {
             char* s = alcc_skip_space(ctx->buffer);
 
             if (*s == '"') {
-                char buf[4096];
+                std::string buf;
                 alcc_parse_string(s, buf);
-                setsvalue(L, &p->k[i], luaS_new(L, buf));
+                setsvalue(L, &p->k[i], luaS_new(L, buf.c_str()));
             } else if (strncmp(s, "nil", 3) == 0) {
                 setnilvalue(&p->k[i]);
             } else if (strncmp(s, "true", 4) == 0) {

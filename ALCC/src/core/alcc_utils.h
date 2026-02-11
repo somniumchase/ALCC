@@ -2,6 +2,7 @@
 #define ALCC_UTILS_H
 
 #include <stdio.h>
+#include <string>
 extern "C" {
 #include <lua.h>
 #include <lauxlib.h>
@@ -23,7 +24,7 @@ void alcc_print_string(const char* s, size_t len);
 
 // Parse a quoted string from input buffer into output buffer
 // Returns pointer to character after the closing quote
-char* alcc_parse_string(char* s, char* buffer);
+char* alcc_parse_string(char* s, std::string& buffer);
 
 // Generic Lua writer function for lua_dump
 int alcc_writer(lua_State* L, const void* p, size_t sz, void* ud);
