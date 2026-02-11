@@ -32,12 +32,12 @@ else ifeq ($(LUA_VER), 5.2)
   BACKEND_OBJ=src/backend/lua52.o
   TOOL_SUFFIX=\"$(SUFFIX)\"
 else ifeq ($(LUA_VER), 5.4)
-  CXXFLAGS=-O2 -Wall -I../lua54_source/src -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_54
+  CXXFLAGS=-O2 -Wall -I../lua54_source -Isrc/core -Isrc/plugin -Isrc/templates -std=c++17 -DLUA_USE_LINUX -Wno-unused-function -DLUA_54
   READLINE_LIBS=-lreadline
   ifdef NO_READLINE
     READLINE_LIBS=
   endif
-  LDFLAGS=-L../lua54_source/src -llua -lm -ldl $(READLINE_LIBS)
+  LDFLAGS=-L../lua54_source -llua -lm -ldl $(READLINE_LIBS)
   SUFFIX=-5.4
   BACKEND_OBJ=src/backend/lua54.o
   TOOL_SUFFIX=\"$(SUFFIX)\"
