@@ -109,8 +109,7 @@ int main(int argc, char** argv) {
     ALCC_LCLOSURE_T* cl = ALCC_NEW_LCLOSURE(L, 1);
     ALCC_SET_CL_PROTO(cl, p);
 
-    setclLvalue2s(L, ALCC_TOP(L), cl);
-    ALCC_TOP(L)++;
+    ALCC_SET_TOP_LCLOSURE(L, cl);
 
     FILE* fout = fopen(output_file, "wb");
     if (!fout) {
