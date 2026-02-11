@@ -150,6 +150,8 @@ jobs:
            # Use posix to avoid readline for Android
            if [ "$LUA_VER" = "5.3" ] || [ "$LUA_VER" = "5.2" ] || [ "$LUA_VER" = "5.3.3" ]; then
               make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_COMPAT_5_2" MYLIBS=""
+           elif [ "$LUA_VER" = "5.4" ]; then
+              make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_USE_DLOPEN" MYLIBS=""
            else
               make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
            fi
@@ -192,6 +194,8 @@ jobs:
              RANLIB="$NDK_TOOLCHAIN/llvm-ranlib"
              if [ "$LUA_VER" = "5.3" ] || [ "$LUA_VER" = "5.2" ] || [ "$LUA_VER" = "5.3.3" ]; then
                 make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_COMPAT_5_2" MYLIBS=""
+             elif [ "$LUA_VER" = "5.4" ]; then
+                make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB" MYCFLAGS="-std=c99 -DLUA_USE_POSIX -DLUA_USE_DLOPEN" MYLIBS=""
              else
                 make $LUA_MAKE_TARGET CC="ccache $CC" AR="$AR" RANLIB="$RANLIB"
              fi
