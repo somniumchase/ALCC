@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <vector>
 #include <string>
+#include <unordered_set>
 
 extern "C" {
 #include "lua.h"
@@ -36,16 +37,13 @@ static int is_identifier(const char* s) {
     for (size_t i = 1; i < len; i++) {
         if (!isalnum((unsigned char)s[i]) && s[i] != '_') return 0;
     }
-    static const char* keywords[] = {
+    static const std::unordered_set<std::string> keywords = {
         "and", "break", "do", "else", "elseif",
         "end", "false", "for", "function", "goto", "if",
         "in", "local", "nil", "not", "or", "repeat",
-        "return", "then", "true", "until", "while",
-        NULL
+        "return", "then", "true", "until", "while"
     };
-    for (int i = 0; keywords[i]; i++) {
-        if (strcmp(s, keywords[i]) == 0) return 0;
-    }
+    if (keywords.count(s)) return 0;
     return 1;
 }
 
