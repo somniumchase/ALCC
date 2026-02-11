@@ -89,6 +89,10 @@
       do { if (v) (p)->flag |= (PF_VAHID | PF_VATAB); else (p)->flag &= ~(PF_VAHID | PF_VATAB); } while(0)
 
     // Lua 5.5+ uses StkIdRel for L->top
+    #ifndef restorestack
+      #define restorestack(L,n) ((L)->stack + (n))
+    #endif
+
     #define ALCC_PEEK_TOP(L, offset) (restorestack(L, (L)->top) + (offset))
     #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, restorestack(L, (L)->top), cl); (L)->top++; } while(0)
   #endif
