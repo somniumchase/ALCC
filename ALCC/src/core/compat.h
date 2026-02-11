@@ -76,11 +76,21 @@
   #define ALCC_TOP(L) (L->top)
 
   #ifndef isvararg
+    // Lua 5.4 (isvararg not defined by headers)
     #define isvararg(p) ((p)->is_vararg)
     #define ALCC_SET_VARARG(p, v) ((p)->is_vararg = (lu_byte)(v))
+
+    // Lua 5.4 uses StkId (StackValue*)
+    #define ALCC_PEEK_TOP(L, offset) (ALCC_TOP(L) + (offset))
+    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, ALCC_TOP(L), cl); ALCC_TOP(L)++; } while(0)
   #else
+    // Lua 5.5 (isvararg defined by headers)
     #define ALCC_SET_VARARG(p, v) \
       do { if (v) (p)->flag |= (PF_VAHID | PF_VATAB); else (p)->flag &= ~(PF_VAHID | PF_VATAB); } while(0)
+
+    // Lua 5.5+ uses StkIdRel for L->top
+    #define ALCC_PEEK_TOP(L, offset) (restorestack(L, (L)->top) + (offset))
+    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, restorestack(L, (L)->top), cl); (L)->top++; } while(0)
   #endif
 
   #define ALCC_UPVAL_KIND_GET(u) ((u)->kind)
@@ -95,16 +105,6 @@
   #define ALCC_LCLOSURE_T LClosure
   #define ALCC_NEW_LCLOSURE(L, n) luaF_newLclosure(L, n)
   #define ALCC_SET_CL_PROTO(cl, proto) ((cl)->p = (proto))
-
-  #ifndef isvararg
-    // Lua 5.5+ uses StkIdRel for L->top
-    #define ALCC_PEEK_TOP(L, offset) (restorestack(L, (L)->top) + (offset))
-    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, restorestack(L, (L)->top), cl); (L)->top++; } while(0)
-  #else
-    // Lua 5.4 uses StkId (StackValue*)
-    #define ALCC_PEEK_TOP(L, offset) (ALCC_TOP(L) + (offset))
-    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, ALCC_TOP(L), cl); ALCC_TOP(L)++; } while(0)
-  #endif
 #endif
 
 #ifdef LUA_52
