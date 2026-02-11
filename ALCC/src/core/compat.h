@@ -85,6 +85,9 @@
     #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, ALCC_TOP(L), cl); ALCC_TOP(L)++; } while(0)
   #else
     // Lua 5.5 (isvararg defined by headers)
+    #undef ALCC_TOP
+    #define ALCC_TOP(L) ((L)->top.p)
+
     #define ALCC_SET_VARARG(p, v) \
       do { if (v) (p)->flag |= (PF_VAHID | PF_VATAB); else (p)->flag &= ~(PF_VAHID | PF_VATAB); } while(0)
 
