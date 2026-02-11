@@ -95,6 +95,16 @@
   #define ALCC_LCLOSURE_T LClosure
   #define ALCC_NEW_LCLOSURE(L, n) luaF_newLclosure(L, n)
   #define ALCC_SET_CL_PROTO(cl, proto) ((cl)->p = (proto))
+
+  #ifndef isvararg
+    // Lua 5.5+ uses StkIdRel for L->top
+    #define ALCC_PEEK_TOP(L, offset) (restorestack(L, (L)->top) + (offset))
+    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, restorestack(L, (L)->top), cl); (L)->top++; } while(0)
+  #else
+    // Lua 5.4 uses StkId (StackValue*)
+    #define ALCC_PEEK_TOP(L, offset) (ALCC_TOP(L) + (offset))
+    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, ALCC_TOP(L), cl); ALCC_TOP(L)++; } while(0)
+  #endif
 #endif
 
 #ifdef LUA_52

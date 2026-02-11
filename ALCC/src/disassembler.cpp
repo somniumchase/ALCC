@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    StkId o = ALCC_TOP(L) - 1;
+    StkId o = ALCC_PEEK_TOP(L, -1);
     if (!ttisLclosure(s2v(o))) {
         fprintf(stderr, "Not a Lua closure\n");
         return 1;
