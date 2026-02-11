@@ -4,6 +4,8 @@ alcc-a
 alcc-dec
 alcc
 alcc-*-5.3.3
+alcc-*-5.4
+alcc-5.4
 *.o
 *.so
 *.luac

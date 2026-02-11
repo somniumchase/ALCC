@@ -10,6 +10,9 @@ AlccBackend* current_backend = &alcc_lua53_backend;
 #elif defined(LUA_52)
 extern AlccBackend alcc_lua52_backend;
 AlccBackend* current_backend = &alcc_lua52_backend;
+#elif defined(LUA_54)
+extern AlccBackend alcc_lua54_backend;
+AlccBackend* current_backend = &alcc_lua54_backend;
 #else
 extern AlccBackend alcc_lua55_backend;
 AlccBackend* current_backend = &alcc_lua55_backend;
