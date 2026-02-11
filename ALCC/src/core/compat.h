@@ -93,8 +93,8 @@
       #define restorestack(L,n) ((L)->stack + (n))
     #endif
 
-    #define ALCC_PEEK_TOP(L, offset) (restorestack(L, (L)->top) + (offset))
-    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, restorestack(L, (L)->top), cl); (L)->top++; } while(0)
+    #define ALCC_PEEK_TOP(L, offset) ((L)->top + (offset))
+    #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, (L)->top, cl); (L)->top++; } while(0)
   #endif
 
   #define ALCC_UPVAL_KIND_GET(u) ((u)->kind)
