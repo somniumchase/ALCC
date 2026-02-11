@@ -45,7 +45,7 @@ else
 fi
 
 echo "[6] Running test_new.luac..."
-../lua54_source/src/lua test_new.luac > output.txt
+../lua54_source/lua test_new.luac > output.txt
 if grep -q "30" output.txt; then
     echo "    Execution output matches!"
 else
@@ -61,7 +61,7 @@ echo "[8] Testing Complex Test Case..."
 ./alcc-c-5.4 tests/complex.lua -o complex.luac
 ./alcc-d-5.4 complex.luac > complex.asm
 ./alcc-a-5.4 complex.asm -o complex_new.luac
-../lua54_source/src/lua complex_new.luac > complex_output.txt
+../lua54_source/lua complex_new.luac > complex_output.txt
 if grep -q "35" complex_output.txt && grep -q "if branch" complex_output.txt; then
     echo "    Complex test output verification passed."
 else
