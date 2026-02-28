@@ -243,6 +243,45 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Install Emscripten
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install latest
+        ./emsdk activate latest
+
+    - name: Build Web Assembly (WASM)
+      run: |
+        source ./emsdk/emsdk_env.sh
+
+        # Build Lua with emscripten
+        LUA_SRC_DIR="lua_source"
+        if [ "$LUA_VER" = "5.4" ]; then
+           LUA_SRC_DIR="lua54_source"
+        elif [ "$LUA_VER" = "5.3" ]; then
+           LUA_SRC_DIR="lua53_source"
+        elif [ "$LUA_VER" = "5.3.3" ]; then
+           LUA_SRC_DIR="androlua533_source"
+        elif [ "$LUA_VER" = "5.2" ]; then
+           LUA_SRC_DIR="lua52_source"
+        fi
+
+        cd $LUA_SRC_DIR
+        make clean
+        make all CC=emcc AR="emar rcu" RANLIB=emranlib
+
+        # Build ALCC web target
+        cd ../ALCC
+        make clean
+        make web LUA_VER=${{ env.LUA_VER }} CXX=emcc CC=emcc AR=emar RANLIB=emranlib
+        python3 build_html.py template.html alcc_web${{ env.LUA_VER == '5.4' && '-5.4' || '' }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.3.3' && '-5.3.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}.js index.html
+
+    - name: Upload Web Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: alcc-web-${{ env.LUA_VER }}
+        path: ALCC/index.html
+
     - name: Clean ALCC Build
       run: |
         cd ALCC

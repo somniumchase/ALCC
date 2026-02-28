@@ -112,5 +112,8 @@ alcc$(SUFFIX): src/main.cpp
 $(PLUGIN_SO): $(PLUGIN_SRC)
 	$(CXX) $(CXXFLAGS) -fPIC -shared -o $@ $< $(LDFLAGS)
 
+web: src/wasm_wrapper.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
+	$(CXX) $(CXXFLAGS) -s WASM=1 -s SINGLE_FILE=1 -s EXPORTED_RUNTIME_METHODS="['ccall','FS']" -o alcc_web$(SUFFIX).js $^ $(LDFLAGS)
+
 clean:
-	rm -f $(ALL_TOOLS) src/core/*.o src/backend/*.o src/templates/*.o src/ast/*.o plugins/*.so alcc-* alcc
+	rm -f $(ALL_TOOLS) src/core/*.o src/backend/*.o src/templates/*.o src/ast/*.o plugins/*.so alcc-* alcc alcc_web*.js
