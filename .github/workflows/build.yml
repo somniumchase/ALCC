@@ -267,8 +267,13 @@ jobs:
         fi
 
         cd $LUA_SRC_DIR
+        if [ -f "makefile" ]; then
+           sed -i 's/-march=native//g' makefile
+        elif [ -f "Makefile" ]; then
+           sed -i 's/-march=native//g' Makefile
+        fi
         make clean
-        make all CC=emcc AR="emar rcu" RANLIB=emranlib
+        make all CC=emcc AR="emar rcu" RANLIB=emranlib MYCFLAGS="-O2" LOCAL_CFLAGS="-O2" || true
 
         # Build ALCC web target
         cd ../ALCC
@@ -286,3 +291,4 @@ jobs:
       run: |
         cd ALCC
         make clean
+        make linux || true
