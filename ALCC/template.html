@@ -118,11 +118,12 @@
             currentBinaryOutput = null;
             downloadBtn.disabled = true;
 
+            let dataToWrite = currentBinaryInput ? currentBinaryInput : inputText.value;
+
             try {
                 if (action === "compile") {
                     // Lua -> Bytecode
-                    const code = inputText.value;
-                    Module.FS.writeFile("/input.lua", code);
+                    Module.FS.writeFile("/input.lua", dataToWrite);
                     const ret = Module.ccall("alcc_compile", "number", ["string", "string"], ["/input.lua", "/output.luac"]);
                     if (ret === 0) {
                         currentBinaryOutput = Module.FS.readFile("/output.luac");
@@ -134,11 +135,7 @@
 
                 } else if (action === "disassemble") {
                     // Bytecode -> ASM
-                    if (!currentBinaryInput) {
-                        alert("Please upload a compiled Lua bytecode file (.luac)");
-                        return;
-                    }
-                    Module.FS.writeFile("/input.luac", currentBinaryInput);
+                    Module.FS.writeFile("/input.luac", dataToWrite);
                     const ret = Module.ccall("alcc_disassemble", "number", ["string", "string"], ["/input.luac", template]);
                     if (ret === 0) {
                         outputText.value = stdOutBuffer;
@@ -148,8 +145,7 @@
 
                 } else if (action === "assemble") {
                     // ASM -> Bytecode
-                    const asm = inputText.value;
-                    Module.FS.writeFile("/input.asm", asm);
+                    Module.FS.writeFile("/input.asm", dataToWrite);
                     const ret = Module.ccall("alcc_assemble", "number", ["string", "string", "string"], ["/input.asm", "/output.luac", template]);
                     if (ret === 0) {
                         currentBinaryOutput = Module.FS.readFile("/output.luac");
@@ -161,11 +157,7 @@
 
                 } else if (action === "decompile") {
                     // Bytecode -> Lua
-                    if (!currentBinaryInput) {
-                        alert("Please upload a compiled Lua bytecode file (.luac)");
-                        return;
-                    }
-                    Module.FS.writeFile("/input.luac", currentBinaryInput);
+                    Module.FS.writeFile("/input.luac", dataToWrite);
                     const ret = Module.ccall("alcc_decompile", "number", ["string", "string"], ["/input.luac", template]);
                     if (ret === 0) {
                         outputText.value = stdOutBuffer;
