@@ -91,7 +91,7 @@ jobs:
           lua53_source
           lua52_source
           androlua533_source
-        key: lua-source-v2-${{ runner.os }}-${{ env.ALCC_TARGET_ARCH }}-${{ env.LUA_VER }}
+        key: lua-source-v3-${{ runner.os }}-${{ env.ALCC_TARGET_ARCH }}-${{ env.LUA_VER }}
 
     - name: Setup Lua
       if: steps.cache-lua.outputs.cache-hit != 'true'
@@ -272,6 +272,14 @@ jobs:
         elif [ -f "Makefile" ]; then
            sed -i 's/-march=native//g' Makefile
         fi
+
+        # Backup the natively compiled liblua.a so we don't cache the WASM one
+        if [ -f "src/liblua.a" ]; then
+           cp src/liblua.a liblua.a.bak
+        elif [ -f "liblua.a" ]; then
+           cp liblua.a liblua.a.bak
+        fi
+
         make clean
         make all CC=emcc AR="emar rcu" RANLIB=emranlib MYCFLAGS="-O2" LOCAL_CFLAGS="-O2" || true
 
@@ -280,6 +288,17 @@ jobs:
         make clean
         make web LUA_VER=${{ env.LUA_VER }} CXX=emcc CC=emcc AR=emar RANLIB=emranlib
         python3 build_html.py template.html alcc_web${{ env.LUA_VER == '5.4' && '-5.4' || '' }}${{ env.LUA_VER == '5.3' && '-5.3' || '' }}${{ env.LUA_VER == '5.3.3' && '-5.3.3' || '' }}${{ env.LUA_VER == '5.2' && '-5.2' || '' }}.js index.html
+
+        # Restore the native liblua.a
+        cd ../$LUA_SRC_DIR
+        make clean
+        if [ -f "liblua.a.bak" ]; then
+           if [ -d "src" ]; then
+              mv liblua.a.bak src/liblua.a
+           else
+              mv liblua.a.bak liblua.a
+           fi
+        fi
 
     - name: Upload Web Artifact
       uses: actions/upload-artifact@v4
@@ -291,4 +310,3 @@ jobs:
       run: |
         cd ALCC
         make clean
-        make linux || true
