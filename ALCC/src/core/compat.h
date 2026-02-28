@@ -89,7 +89,7 @@
     #define ALCC_TOP(L) ((L)->top.p)
 
     #define ALCC_SET_VARARG(p, v) \
-      do { if (v) (p)->flag |= (PF_VAHID | PF_VATAB); else (p)->flag &= ~(PF_VAHID | PF_VATAB); } while(0)
+      do { (p)->flag = ((p)->flag & ~(PF_VAHID | PF_VATAB)) | ((v) & (PF_VAHID | PF_VATAB)); } while(0)
 
     // Lua 5.5+ uses StkIdRel for L->top
     #ifndef restorestack
