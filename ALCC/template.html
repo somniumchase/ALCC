@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALCC Web Interface</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { display: flex; flex-direction: column; gap: 10px; max-width: 800px; margin: auto; }
+        .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+        textarea { width: 100%; height: 200px; font-family: monospace; }
+        .buttons { display: flex; gap: 10px; }
+        button { padding: 8px 16px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>ALCC (Assembly Lua Compiler Collection) Web</h1>
+
+    <div class="controls">
+        <label>
+            Action:
+            <select id="action-select">
+                <option value="compile">Compile (Lua -> Bytecode)</option>
+                <option value="disassemble">Disassemble (Bytecode -> ASM)</option>
+                <option value="assemble">Assemble (ASM -> Bytecode)</option>
+                <option value="decompile">Decompile (Bytecode -> Lua)</option>
+            </select>
+        </label>
+        <label>
+            Template:
+            <select id="template-select">
+                <option value="default">default</option>
+                <option value="template2">template2</option>
+            </select>
+        </label>
+    </div>
+
+    <div>
+        <label for="input-text">Input (Text/Code):</label><br>
+        <textarea id="input-text" placeholder="Enter Lua source or Assembly here..."></textarea>
+    </div>
+
+    <div>
+        <label for="input-file">Input (Binary File):</label>
+        <input type="file" id="input-file">
+    </div>
+
+    <div class="buttons">
+        <button id="run-btn">Run</button>
+        <button id="download-btn" disabled>Download Binary Output</button>
+    </div>
+
+    <div>
+        <label for="output-text">Output (Text/Code):</label><br>
+        <textarea id="output-text" readonly></textarea>
+    </div>
+</div>
+
+<!-- Placeholder for WASM injection -->
+// INSERT_WASM_HERE
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const actionSelect = document.getElementById("action-select");
+        const templateSelect = document.getElementById("template-select");
+        const inputText = document.getElementById("input-text");
+        const inputFile = document.getElementById("input-file");
+        const outputText = document.getElementById("output-text");
+        const runBtn = document.getElementById("run-btn");
+        const downloadBtn = document.getElementById("download-btn");
+
+        let currentBinaryInput = null;
+        let currentBinaryOutput = null;
+
+        inputFile.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    currentBinaryInput = new Uint8Array(event.target.result);
+                    inputText.value = `[Binary file loaded: ${file.name} (${currentBinaryInput.length} bytes)]`;
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                currentBinaryInput = null;
+            }
+        });
+
+        // Redirect stderr to capture errors/output
+        let stdOutBuffer = "";
+        let stdErrBuffer = "";
+
+        if (typeof Module === 'undefined') {
+            window.Module = {};
+        }
+
+        Module.print = function(text) {
+            stdOutBuffer += text + "\n";
+        };
+        Module.printErr = function(text) {
+            stdErrBuffer += text + "\n";
+        };
+
+        runBtn.addEventListener("click", () => {
+            if (!Module.ccall) {
+                alert("WASM module not loaded yet.");
+                return;
+            }
+
+            const action = actionSelect.value;
+            const template = templateSelect.value;
+
+            stdOutBuffer = "";
+            stdErrBuffer = "";
+            outputText.value = "";
+            currentBinaryOutput = null;
+            downloadBtn.disabled = true;
+
+            try {
+                if (action === "compile") {
+                    // Lua -> Bytecode
+                    const code = inputText.value;
+                    Module.FS.writeFile("/input.lua", code);
+                    const ret = Module.ccall("alcc_compile", "number", ["string", "string"], ["/input.lua", "/output.luac"]);
+                    if (ret === 0) {
+                        currentBinaryOutput = Module.FS.readFile("/output.luac");
+                        outputText.value = `Compilation successful. Output size: ${currentBinaryOutput.length} bytes. Click Download to save.`;
+                        downloadBtn.disabled = false;
+                    } else {
+                        outputText.value = "Compilation failed:\n" + stdErrBuffer;
+                    }
+
+                } else if (action === "disassemble") {
+                    // Bytecode -> ASM
+                    if (!currentBinaryInput) {
+                        alert("Please upload a compiled Lua bytecode file (.luac)");
+                        return;
+                    }
+                    Module.FS.writeFile("/input.luac", currentBinaryInput);
+                    const ret = Module.ccall("alcc_disassemble", "number", ["string", "string"], ["/input.luac", template]);
+                    if (ret === 0) {
+                        outputText.value = stdOutBuffer;
+                    } else {
+                        outputText.value = "Disassembly failed:\n" + stdErrBuffer;
+                    }
+
+                } else if (action === "assemble") {
+                    // ASM -> Bytecode
+                    const asm = inputText.value;
+                    Module.FS.writeFile("/input.asm", asm);
+                    const ret = Module.ccall("alcc_assemble", "number", ["string", "string", "string"], ["/input.asm", "/output.luac", template]);
+                    if (ret === 0) {
+                        currentBinaryOutput = Module.FS.readFile("/output.luac");
+                        outputText.value = `Assembly successful. Output size: ${currentBinaryOutput.length} bytes. Click Download to save.`;
+                        downloadBtn.disabled = false;
+                    } else {
+                        outputText.value = "Assembly failed:\n" + stdErrBuffer;
+                    }
+
+                } else if (action === "decompile") {
+                    // Bytecode -> Lua
+                    if (!currentBinaryInput) {
+                        alert("Please upload a compiled Lua bytecode file (.luac)");
+                        return;
+                    }
+                    Module.FS.writeFile("/input.luac", currentBinaryInput);
+                    const ret = Module.ccall("alcc_decompile", "number", ["string", "string"], ["/input.luac", template]);
+                    if (ret === 0) {
+                        outputText.value = stdOutBuffer;
+                    } else {
+                        outputText.value = "Decompilation failed:\n" + stdErrBuffer;
+                    }
+                }
+            } catch (e) {
+                outputText.value = "Exception occurred:\n" + e.toString() + "\n" + stdErrBuffer;
+            }
+        });
+
+        downloadBtn.addEventListener("click", () => {
+            if (currentBinaryOutput) {
+                const blob = new Blob([currentBinaryOutput], { type: "application/octet-stream" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "output.luac";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+        });
+    });
+</script>
+</body>
+</html>
