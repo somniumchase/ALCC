@@ -49,7 +49,7 @@ else
   TOOL_SUFFIX=\"\"
 endif
 
-ALL_TOOLS=alcc-c$(SUFFIX) alcc-d$(SUFFIX) alcc-a$(SUFFIX) alcc-dec$(SUFFIX) alcc-cfg$(SUFFIX) alcc$(SUFFIX)
+ALL_TOOLS=alcc-c$(SUFFIX) alcc-d$(SUFFIX) alcc-a$(SUFFIX) alcc-dec$(SUFFIX) alcc-cfg$(SUFFIX) alcc-info$(SUFFIX) alcc$(SUFFIX)
 CORE_OBJ=src/core/alcc_utils.o $(BACKEND_OBJ)
 AST_OBJ=src/ast/AST.o src/ast/ASTPrinter.o
 TEMPLATE_OBJ=src/templates/TemplateFactory.o src/templates/DefaultTemplate.o src/templates/Template2.o src/templates/DecompilerCore.o $(AST_OBJ)
@@ -107,6 +107,9 @@ alcc-dec$(SUFFIX): src/decompiler.cpp $(CORE_OBJ) $(TEMPLATE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 alcc-cfg$(SUFFIX): src/cfg_gen.cpp $(CORE_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+
+alcc-info$(SUFFIX): src/info.cpp $(CORE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 alcc$(SUFFIX): src/main.cpp
