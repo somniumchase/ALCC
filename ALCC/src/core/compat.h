@@ -6,6 +6,8 @@
   #define s2v(o) (o)
   #define setclLvalue2s(L, o, cl) setclLvalue(L, o, cl)
   #define ALCC_TOP(L) (L->top)
+  #define ALCC_PEEK_TOP(L, offset) (ALCC_TOP(L) + (offset))
+  #define ALCC_SET_TOP_LCLOSURE(L, cl) do { setclLvalue2s(L, ALCC_TOP(L), cl); ALCC_TOP(L)++; } while(0)
 
   // Missing 5.4+ opcodes (dummies)
   // Must be unique negative values to avoid duplicate case errors in switch
@@ -23,6 +25,8 @@
   #define OP_ADDI -12
   #define OP_GETFIELD -13
   #define OP_SETFIELD -14
+  #define OP_RETURN0 -22
+  #define OP_RETURN1 -23
 
   #ifdef LUA_52
     // Missing 5.3 opcodes in 5.2
