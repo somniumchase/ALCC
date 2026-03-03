@@ -8,6 +8,7 @@ ALCC is a comprehensive toolchain for Lua 5.5 (work) bytecode manipulation. It p
 - **alcc-d**: Disassembler (Bytecode -> Assembly) - Converts bytecode into human-readable assembly.
 - **alcc-a**: Assembler (Assembly -> Bytecode) - Assembles modified assembly back into valid bytecode.
 - **alcc-dec**: Decompiler (Bytecode -> Source Pseudo-code) - Reconstructs high-level Lua source code from bytecode, including control flow (if/else, loops) and variable naming.
+- **alcc-cfg**: Control Flow Graph Generator (Bytecode -> DOT) - Analyzes basic blocks and execution paths, outputting a graph in Graphviz DOT format.
 
 ## Architecture
 
@@ -84,6 +85,11 @@ The build process assumes a sibling directory structure where `lua_source` is lo
 ### Decompiler
 ```bash
 ./alcc-dec input.luac > output.lua
+```
+
+### CFG Generator
+```bash
+./alcc-cfg input.luac > output.dot
 ```
 
 ### Plugin System
