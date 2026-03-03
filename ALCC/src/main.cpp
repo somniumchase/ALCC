@@ -46,9 +46,10 @@ int main(int argc, char* argv[]) {
         std::cout << "2. Disassemble (luac -> asm)\n";
         std::cout << "3. Assemble (asm -> luac)\n";
         std::cout << "4. Decompile (luac -> lua)\n";
-        std::cout << "5. Switch Template (Current: " << current_template << ")\n";
-        std::cout << "6. Exit\n";
-        std::cout << "Enter choice (1-6): ";
+        std::cout << "5. Generate CFG (luac -> dot)\n";
+        std::cout << "6. Switch Template (Current: " << current_template << ")\n";
+        std::cout << "7. Exit\n";
+        std::cout << "Enter choice (1-7): ";
 
         int choice = 0;
         if (!(std::cin >> choice)) {
@@ -59,11 +60,11 @@ int main(int argc, char* argv[]) {
         }
         std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // clear buffer
 
-        if (choice == 6) {
+        if (choice == 7) {
             break;
         }
 
-        if (choice < 1 || choice > 6) {
+        if (choice < 1 || choice > 7) {
             std::cerr << "Invalid choice." << std::endl;
             continue;
         }
@@ -71,7 +72,7 @@ int main(int argc, char* argv[]) {
         fs::path tool_path;
         std::string cmd;
 
-        if (choice == 5) {
+        if (choice == 6) {
             // List templates
             tool_path = fs::path(base_dir) / "alcc-dec";
             cmd = "\"" + tool_path.string() + "\" --list-templates";
@@ -123,6 +124,10 @@ int main(int argc, char* argv[]) {
             case 4: // Decompile: alcc-dec input > output
                 tool_path = fs::path(base_dir) / ("alcc-dec" TOOL_SUFFIX);
                 cmd = "\"" + tool_path.string() + "\" \"" + input_path + "\" -t " + current_template + " > \"" + output_path + "\"";
+                break;
+            case 5: // CFG Gen: alcc-cfg input > output
+                tool_path = fs::path(base_dir) / ("alcc-cfg" TOOL_SUFFIX);
+                cmd = "\"" + tool_path.string() + "\" \"" + input_path + "\" > \"" + output_path + "\"";
                 break;
         }
 
