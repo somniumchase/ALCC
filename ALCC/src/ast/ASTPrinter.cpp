@@ -40,7 +40,7 @@ void LuaPrinter::visit(Literal& node) {
                 else if (c == '\r') out << "\\r";
                 else if (c == '\t') out << "\\t";
                 else if (isprint(c)) out << c;
-                else out << "\\" << std::setfill('0') << std::setw(3) << (int)(unsigned char)c;
+                else out << "\\" << std::setfill('0') << std::setw(3) << std::dec << (int)(unsigned char)c;
             }
             out << "\"";
             break;

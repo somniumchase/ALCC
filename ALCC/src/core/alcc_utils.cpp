@@ -44,7 +44,7 @@ void alcc_print_string(const char* s, size_t len) {
         else if (c == '\f') printf("\\f");
         else if (c == '\v') printf("\\v");
         else if (isprint(c)) printf("%c", c);
-        else printf("\\x%02x", c);
+        else printf("\\%03d", c);
     }
     printf("\"");
 }
