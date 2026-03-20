@@ -1,0 +1,52 @@
+diff --git a/lundump.c b/lundump.c
+index 4080af9..5e94f5e 100644
+--- a/lundump.c
++++ b/lundump.c
+@@ -33,6 +33,7 @@ typedef struct {
+   lua_State *L;
+   ZIO *Z;
+   const char *name;
++  size_t luac_size_t;
+ } LoadState;
+
+
+@@ -87,8 +88,11 @@ static lua_Integer LoadInteger (LoadState *S) {
+
+ static TString *LoadString (LoadState *S) {
+   size_t size = LoadByte(S);
+-  if (size == 0xFF)
+-    LoadVar(S, size);
++  if (size == 0xFF) {
++    uint32_t s32 = 0;
++    LoadBlock(S, &s32, 4);
++    size = (size_t)s32;
++  }
+   if (size == 0)
+     return NULL;
+   else if (--size <= LUAI_MAXSHORTLEN) {  /* short string? */
+@@ -231,7 +235,7 @@ static void fchecksize (LoadState *S, size_t size, const char *tname) {
+ }
+
+
+-#define checksize(S,t)	fchecksize(S,sizeof(t),#t)
++#define checksize(S,t, expected)	fchecksize(S,expected,#t)
+
+ static void checkHeader (LoadState *S) {
+   checkliteral(S, LUA_SIGNATURE + 1, "not a");  /* 1st char already checked */
+@@ -240,11 +244,11 @@ static void checkHeader (LoadState *S) {
+   if (LoadByte(S) != LUAC_FORMAT)
+     error(S, "format mismatch in");
+   checkliteral(S, LUAC_DATA, "corrupted");
+-  checksize(S, int);
+-  checksize(S, size_t);
+-  checksize(S, Instruction);
+-  checksize(S, lua_Integer);
+-  checksize(S, lua_Number);
++  checksize(S, int, sizeof(int));
++  S->luac_size_t = LoadByte(S);
++  checksize(S, Instruction, sizeof(Instruction));
++  checksize(S, lua_Integer, sizeof(lua_Integer));
++  checksize(S, lua_Number, sizeof(lua_Number));
+   if (LoadInteger(S) != LUAC_INT)
+     error(S, "endianness mismatch in");
+   if (LoadNumber(S) != LUAC_NUM)

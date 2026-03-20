@@ -17,6 +17,9 @@ if grep -q "float.h" ../androlua533_source/lmathlib.c; then
     echo "    Patch already applied."
 else
     echo "    Applying patch..."
+    if [ -f "patches/androlua533_lundump_size.patch" ]; then
+        (cd ../androlua533_source && patch -p1 < ../ALCC/patches/androlua533_lundump_size.patch)
+    fi
     if [ -f "patches/androlua533_support.patch" ]; then
         (cd ../androlua533_source && patch -p1 < ../ALCC/patches/androlua533_support.patch) || { echo "Patch failed!"; exit 1; }
     else
