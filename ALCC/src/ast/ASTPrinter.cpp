@@ -207,11 +207,12 @@ void LuaPrinter::visit(RepeatStmt& node) {
     print_indent();
     out << "repeat\n";
     indent_level++;
-    node.body->accept(*this);
+    if (node.body) node.body->accept(*this);
     indent_level--;
     print_indent();
     out << "until ";
-    node.condition->accept(*this);
+    if (node.condition) node.condition->accept(*this);
+    else out << "true"; // fallback if missing condition
 }
 
 void LuaPrinter::visit(ForNumStmt& node) {
