@@ -21,6 +21,8 @@ extern "C" {
 #include "templates/DefaultTemplate.h"
 #include "templates/Template2.h"
 
+extern bool g_use_hex_strings;
+
 static DefaultTemplate default_tpl;
 static Template2 tpl2;
 static bool templates_registered = false;
@@ -34,6 +36,11 @@ void init_templates() {
 }
 
 extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
+void alcc_set_hex_strings(int enable) {
+    g_use_hex_strings = (enable != 0);
+}
 
 EMSCRIPTEN_KEEPALIVE
 int alcc_compile(const char* input_file, const char* output_file) {
