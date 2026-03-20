@@ -3,6 +3,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <fstream>
+#include <vector>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
@@ -77,22 +80,55 @@ int main(int argc, char* argv[]) {
             // List templates
             tool_path = fs::path(base_dir) / "alcc-dec";
             cmd = "\"" + tool_path.string() + "\" --list-templates";
-            std::system(cmd.c_str());
 
-            std::string new_tpl = get_input("Enter template name: ");
-            bool valid = !new_tpl.empty();
-            for (char c : new_tpl) {
-                if (!isalnum(c) && c != '_' && c != '-') {
-                    valid = false;
-                    break;
+            std::vector<std::string> templates;
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (pipe) {
+                char buffer[256];
+                std::string result = "";
+                while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                    result += buffer;
+                }
+                pclose(pipe);
+
+                std::istringstream stream(result);
+                std::string line;
+                while (std::getline(stream, line)) {
+                    if (line.rfind("Available templates:", 0) == 0) continue;
+                    // trim spaces and newlines
+                    size_t start = line.find_first_not_of(" \t\r\n");
+                    if (start != std::string::npos) {
+                        size_t end = line.find_last_not_of(" \t\r\n");
+                        templates.push_back(line.substr(start, end - start + 1));
+                    }
                 }
             }
 
-            if (valid) {
-                current_template = new_tpl;
+            if (templates.empty()) {
+                std::cerr << "No templates found or could not read templates." << std::endl;
+                continue;
+            }
+
+            std::cout << "\nAvailable templates:\n";
+            for (size_t i = 0; i < templates.size(); ++i) {
+                std::cout << i + 1 << ". " << templates[i] << "\n";
+            }
+            std::cout << "Enter choice (1-" << templates.size() << "): ";
+
+            int tpl_choice = 0;
+            if (!(std::cin >> tpl_choice)) {
+                std::cin.clear();
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                std::cerr << "Invalid input." << std::endl;
+                continue;
+            }
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+            if (tpl_choice >= 1 && tpl_choice <= (int)templates.size()) {
+                current_template = templates[tpl_choice - 1];
                 std::cout << "Template switched to: " << current_template << std::endl;
-            } else if (!new_tpl.empty()) {
-                std::cerr << "Invalid template name. Only alphanumeric characters, hyphens, and underscores are allowed." << std::endl;
+            } else {
+                std::cerr << "Invalid choice." << std::endl;
             }
             continue;
         }

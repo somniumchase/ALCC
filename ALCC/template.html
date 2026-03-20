@@ -35,6 +35,9 @@
                 <option value="template2">template2</option>
             </select>
         </label>
+        <label>
+            <input type="checkbox" id="hex-strings-chk"> Use Hex Strings
+        </label>
     </div>
 
     <div>
@@ -65,6 +68,7 @@
     document.addEventListener("DOMContentLoaded", () => {
         const actionSelect = document.getElementById("action-select");
         const templateSelect = document.getElementById("template-select");
+        const hexStringsChk = document.getElementById("hex-strings-chk");
         const inputText = document.getElementById("input-text");
         const inputFile = document.getElementById("input-file");
         const outputText = document.getElementById("output-text");
@@ -111,6 +115,9 @@
 
             const action = actionSelect.value;
             const template = templateSelect.value;
+            const useHex = hexStringsChk.checked ? 1 : 0;
+
+            Module.ccall("alcc_set_hex_strings", null, ["number"], [useHex]);
 
             stdOutBuffer = "";
             stdErrBuffer = "";

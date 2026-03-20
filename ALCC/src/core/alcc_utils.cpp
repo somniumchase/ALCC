@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+bool g_use_hex_strings = false;
+
 // Default backend
 #ifdef LUA_53
 extern AlccBackend alcc_lua53_backend;
@@ -43,8 +45,9 @@ void alcc_print_string(const char* s, size_t len) {
         else if (c == '\b') printf("\\b");
         else if (c == '\f') printf("\\f");
         else if (c == '\v') printf("\\v");
+        else if (g_use_hex_strings) printf("\\x%02x", c);
         else if (isprint(c)) printf("%c", c);
-        else printf("\\x%02x", c);
+        else printf("\\x%02x", c); // default fallback for non-printables
     }
     printf("\"");
 }
